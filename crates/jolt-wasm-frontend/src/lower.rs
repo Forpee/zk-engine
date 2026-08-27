@@ -53,8 +53,9 @@
 
 use jolt_wasm_ir::layout::{
     input_address, linear_address, output_address, table_slot_address, DEFAULT_MAX_PAGES,
-    GLOBALS_BASE, LINEAR_CELL_BYTES, MAX_PAGES, MAX_TABLE_SLOTS, MEMORY_SIZE_ADDR, PAGE_SIZE,
-    SHADOW_STACK_BASE, TABLE_SLOT_BYTES, TERMINATION_ADDR, WASM_WORD_BYTES, WORD_BYTES,
+    GLOBALS_BASE, LINEAR_CELL_BYTES, MAX_OUTPUT_WORDS, MAX_PAGES, MAX_TABLE_SLOTS,
+    MEMORY_SIZE_ADDR, PAGE_SIZE, SHADOW_STACK_BASE, TABLE_SLOT_BYTES, TERMINATION_ADDR,
+    WASM_WORD_BYTES, WORD_BYTES,
 };
 use jolt_wasm_ir::{
     shift_right_bitmask, AdviceHint, AluOp, AssertFailure, DataSegment, Ir, IrFunction, IrProgram,
@@ -173,10 +174,39 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
         });
     }
     let mut entries = std::collections::BTreeMap::new();
+    let mut output_words = std::collections::BTreeMap::new();
     for (name, function) in &module.exports {
         let pc = emitter.pc()?;
-        emitter.emit_entry_stub(*function, module.start)?;
+        let outputs = match module.memory_outputs.get(name) {
+            Some(words) => {
+                let ty = module
+                    .func_type(*function)
+                    .map_err(|_| LowerError::FunctionIndex(*function))?;
+                if ty.results.as_slice() != [crate::source::ValType::I32] {
+                    return Err(LowerError::OutputsNeedPointer {
+                        export: name.clone(),
+                    });
+                }
+                if u64::from(*words) > MAX_OUTPUT_WORDS {
+                    return Err(LowerError::TooManyOutputs {
+                        export: name.clone(),
+                        words: *words,
+                        max: MAX_OUTPUT_WORDS,
+                    });
+                }
+                Outputs::Memory { words: *words }
+            }
+            None => Outputs::Results,
+        };
+        emitter.emit_entry_stub(*function, module.start, outputs)?;
         let _ = entries.insert(name.clone(), pc);
+        let _ = output_words.insert(
+            name.clone(),
+            match outputs {
+                Outputs::Results => signatures[*function as usize].results,
+                Outputs::Memory { words } => words,
+            },
+        );
     }
     for (pc, callee) in emitter.call_fixups {
         let entry = functions
@@ -213,6 +243,7 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
         functions,
         exports: module.exports.clone(),
         entries,
+        output_words,
         memory,
         globals: module.globals.iter().map(|g| g.init).collect(),
         data: module
@@ -240,6 +271,14 @@ fn canonical_type_ids(types: &[FuncType]) -> Vec<u32> {
             }) as u32
         })
         .collect()
+}
+
+/// How an entry stub publishes an export's results: its return values, or
+/// `words` `u64`s read from linear memory at the returned `i32` pointer.
+#[derive(Debug, Clone, Copy)]
+enum Outputs {
+    Results,
+    Memory { words: u32 },
 }
 
 /// A call target: a function index, or a table slot held in a register with
@@ -788,13 +827,18 @@ impl Emitter<'_> {
     /// set `SP`, run `start`, load the parameters from the public input words,
     /// call, store the results to the public output words, set the
     /// termination word, and halt.
-    fn emit_entry_stub(&mut self, function: u32, start: Option<u32>) -> Result<(), LowerError> {
+    fn emit_entry_stub(
+        &mut self,
+        function: u32,
+        start: Option<u32>,
+        outputs: Outputs,
+    ) -> Result<(), LowerError> {
         let sig = *self
             .signatures
             .get(function as usize)
             .ok_or(LowerError::FunctionIndex(function))?;
         // The stub is a frame with no locals; its operand stack holds the
-        // arguments, then the results.
+        // arguments, then the results (or the output pointer and one word).
         let ctx = FunctionCtx {
             index: function,
             sig: Signature {
@@ -802,7 +846,7 @@ impl Emitter<'_> {
                 params: 0,
                 results: 0,
                 locals: 0,
-                frame_slots: sig.params.max(sig.results) as usize,
+                frame_slots: sig.params.max(sig.results).max(2) as usize,
             },
             labels: Vec::new(),
             pending: Vec::new(),
@@ -818,9 +862,29 @@ impl Emitter<'_> {
             let _ = self.emit(load(rd, Reg::ZERO, input_address(u64::from(i)) as i64))?;
         }
         self.emit_call(&ctx, sig.params, Callee::Direct(function))?;
-        for k in 0..sig.results {
-            let value = ctx.slot(k)?;
-            let _ = self.emit(store(Reg::ZERO, value, output_address(u64::from(k)) as i64))?;
+        match outputs {
+            Outputs::Results => {
+                for k in 0..sig.results {
+                    let value = ctx.slot(k)?;
+                    let _ =
+                        self.emit(store(Reg::ZERO, value, output_address(u64::from(k)) as i64))?;
+                }
+            }
+            Outputs::Memory { words } => {
+                let (pointer, word) = (ctx.slot(0)?, ctx.slot(1)?);
+                for k in 0..words {
+                    self.emit_load(
+                        word,
+                        pointer,
+                        u64::from(k) * WORD_BYTES,
+                        MemWidth::B8,
+                        false,
+                        Width::W64,
+                    )?;
+                    let _ =
+                        self.emit(store(Reg::ZERO, word, output_address(u64::from(k)) as i64))?;
+                }
+            }
         }
         self.emit_all([
             Ir::const_(Reg::T0, 1),
@@ -828,7 +892,8 @@ impl Emitter<'_> {
             Ir::Jump {
                 target: IrProgram::HALT_PC,
             },
-        ])
+        ])?;
+        self.flush_cold()
     }
 
     /// `memory.grow` by `rs` pages into `rd`: the old size in pages, or

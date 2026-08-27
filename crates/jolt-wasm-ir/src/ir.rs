@@ -484,6 +484,11 @@ pub struct IrProgram {
     /// stores its results to the public output words, sets the termination
     /// word, and jumps to [`IrProgram::HALT_PC`] — one contiguous trace.
     pub entries: BTreeMap<String, Pc>,
+    /// Exported function name → number of public output words its entry
+    /// stub stores: the function's results, or — for an export that returns
+    /// a pointer and declares `jolt.outputs.<name>` — the words it copies
+    /// from linear memory at that pointer.
+    pub output_words: BTreeMap<String, u32>,
     pub memory: MemoryLimits,
     /// Initial global values (zero-extended to 64 bits).
     pub globals: Vec<u64>,

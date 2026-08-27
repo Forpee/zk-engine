@@ -96,13 +96,24 @@ const FIBONACCI_WAT: &str = r#"
 #[derive(Debug, Copy, Clone, ValueEnum)]
 pub enum Workload {
     Fibonacci,
+    /// `guests/bls-g1`: blst's BLS12-381 G1 scalar multiplication `[s]·G1`
+    /// (`tests/fixtures/bls_g1.wasm`), scaled by the scalar's bit length.
+    BlsG1,
 }
+
+/// The `bls-g1` guest (built from `guests/bls-g1`, see
+/// `scripts/build_guests.sh`).
+const BLS_G1_WASM: &[u8] = include_bytes!("../tests/fixtures/bls_g1.wasm");
+/// Measured trace cost of `g1_mul`: a fixed window setup plus per scalar bit.
+const BLS_G1_BASE_CYCLES: f64 = 1_320_000.0;
+const BLS_G1_CYCLES_PER_BIT: f64 = 150_000.0;
 
 impl Workload {
     /// The canonical name.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Fibonacci => "fibonacci",
+            Self::BlsG1 => "bls-g1",
         }
     }
 
@@ -110,26 +121,43 @@ impl Workload {
     pub const fn default_scale(self) -> u32 {
         match self {
             Self::Fibonacci => 16,
+            Self::BlsG1 => 25,
         }
     }
 
     /// The workload's module and exported entry.
     fn program(self) -> (IrProgram, &'static str) {
-        let wat = match self {
-            Self::Fibonacci => FIBONACCI_WAT,
+        let (bytes, entry) = match self {
+            Self::Fibonacci => (wat::parse_str(FIBONACCI_WAT).expect("workload wat"), "fib"),
+            Self::BlsG1 => (BLS_G1_WASM.to_vec(), "g1_mul"),
         };
-        let bytes = wat::parse_str(wat).expect("workload wat");
         let program = WasmModule::decode(&bytes)
             .expect("decode workload")
             .lower()
             .expect("lower workload");
-        (program, "fib")
+        (program, entry)
     }
 
     /// The entry arguments targeting `target` trace cycles.
     fn args(self, target: usize) -> Vec<u64> {
         match self {
             Self::Fibonacci => vec![scale_to_target_ops(target, CYCLES_PER_FIBONACCI_UNIT)],
+            Self::BlsG1 => {
+                // The all-ones scalar of the bit length that fits the target.
+                let bits = ((target as f64 - BLS_G1_BASE_CYCLES) / BLS_G1_CYCLES_PER_BIT)
+                    .floor()
+                    .clamp(1.0, 255.0) as u32;
+                let mut limbs = [0u64; 4];
+                for (i, limb) in limbs.iter_mut().enumerate() {
+                    let low = (64 * i) as u32;
+                    *limb = match bits.saturating_sub(low) {
+                        0 => 0,
+                        n if n >= 64 => u64::MAX,
+                        n => (1u64 << n) - 1,
+                    };
+                }
+                limbs.to_vec()
+            }
         }
     }
 }

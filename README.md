@@ -40,6 +40,20 @@ cargo nextest run -p jolt-prover --cargo-quiet -E 'binary(wasm_e2e)'
 cargo nextest run -p jolt-prover --features zk --cargo-quiet -E 'binary(wasm_e2e)'
 ```
 
+## The MVP use case
+
+`guests/bls-g1` compiles blst's BLS12-381 G1 scalar multiplication to
+WebAssembly; `[s]·G1` is proved with the scalar as public input and the
+compressed point as public output, checked against native blst:
+
+```bash
+cargo nextest run -p jolt-prover --cargo-quiet -E 'binary(bls_g1_e2e)'
+cargo run --release -p jolt-prover --features profiling -- profile --name bls-g1 --scale 25
+```
+
+A 255-bit scalar is a 2^25 trace: ~2 minutes and ~7 GB to prove on a laptop,
+0.2 s to verify. `scripts/build_guests.sh` rebuilds the guest fixture.
+
 ## Profiling
 
 ```bash

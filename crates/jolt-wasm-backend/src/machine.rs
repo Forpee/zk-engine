@@ -130,7 +130,13 @@ impl<'a> Machine<'a> {
             .functions
             .get(function as usize)
             .ok_or_else(|| ExecutionError::UnknownExport(name.to_owned()))?;
-        let (params, results) = (f.params as usize, f.results as usize);
+        let params = f.params as usize;
+        let results = *self
+            .program
+            .output_words
+            .get(name)
+            .ok_or_else(|| ExecutionError::UnknownExport(name.to_owned()))?
+            as usize;
         if args.len() != params {
             return Err(ExecutionError::ArgumentCount {
                 name: name.to_owned(),

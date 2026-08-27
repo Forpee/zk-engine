@@ -1,0 +1,22 @@
+[package]
+name = "bls-g1-guest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Built for wasm32-unknown-unknown (see .cargo/config.toml); not a workspace
+# member so host builds never compile it.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+blst = { version = "0.3.17", default-features = false, features = ["no-threads"] }
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false

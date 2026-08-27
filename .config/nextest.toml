@@ -19,5 +19,5 @@ filter = 'package(jolt-verifier) and test(zk)'
 test-group = 'zk-core-fixtures'
 
 [[profile.default.overrides]]
-filter = 'package(jolt-prover) and binary(wasm_e2e)'
+filter = 'package(jolt-prover) and (binary(wasm_e2e) or binary(bls_g1_e2e))'
 test-group = 'wasm-e2e'

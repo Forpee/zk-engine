@@ -35,9 +35,27 @@ cargo nextest run -p [package_name] [test_name] --cargo-quiet
 cargo nextest run -p jolt-prover --cargo-quiet -E 'binary(wasm_e2e)'
 cargo nextest run -p jolt-prover --features zk --cargo-quiet -E 'binary(wasm_e2e)'
 
+# The MVP use case: blst's BLS12-381 G1 scalar multiplication compiled to wasm
+# (guests/bls-g1 → tests/fixtures/bls_g1.wasm), outputs checked against native
+# blst, one small-scalar run proved and verified
+cargo nextest run -p jolt-prover --cargo-quiet -E 'binary(bls_g1_e2e)'
+
 # Kernel parity suites (reference vs optimized tiers) and the verifier/claims units
 cargo nextest run -p jolt-kernels -p jolt-verifier -p jolt-claims -p jolt-witness --cargo-quiet
 ```
+
+### Guests
+
+`guests/` holds Rust guest crates built for `wasm32-unknown-unknown` (not
+workspace members). `scripts/build_guests.sh` rebuilds them into
+`crates/jolt-prover/tests/fixtures/` (needs the `wasm32-unknown-unknown`
+target; blst's C sources need a clang with a wasm32 target). Guest rules: no
+imports, integer core only (`.cargo/config.toml` pins `target-cpu=mvp`
+without bulk memory / reference types / multi-value), `panic = "abort"`,
+frames ≤ 116 locals + stack. An export returning more than 5 values returns
+an `i32` pointer instead and declares the output word count in a custom
+section `jolt.outputs.<export>` (`#[link_section]` on a 4-byte static); the
+entry stub copies those words from linear memory into the public outputs.
 
 ### Profiling
 
@@ -46,7 +64,9 @@ cargo nextest run -p jolt-kernels -p jolt-verifier -p jolt-claims -p jolt-witnes
 # (Perfetto UI / trace_processor SQL), summary.json (machine-queryable), and memory.html,
 # with benchmark-runs/latest_modular_{name}_{scale} symlinked to the newest successful run.
 cargo run --release -p jolt-prover --features profiling -- profile --name fibonacci --format chrome
-# --name options: fibonacci (default scale 16; iterative fibonacci WAT, 17 rows/iteration)
+# --name options: fibonacci (default scale 16; iterative fibonacci WAT, 17 rows/iteration),
+#   bls-g1 (default scale 25; the blst G1 guest, scalar bit length sized to the scale:
+#   ~1.3M cycles + 150k per bit, 24M for a 255-bit scalar)
 # --scale <log2 trace length> overrides; --format none = no-subscriber Instant baseline
 # --backend reference (default, naive test oracle) | optimized (performance tier);
 # optimized artifacts get an _optimized suffix on the run dir and latest_ symlink

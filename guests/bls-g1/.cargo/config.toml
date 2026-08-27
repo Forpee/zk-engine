@@ -1,0 +1,11 @@
+[build]
+target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+# The MVP integer core the jolt-wasm frontend accepts: no bulk memory,
+# reference types, or multi-value; keep call_indirect and sign-extension.
+rustflags = [
+  "-C", "target-cpu=mvp",
+  "-C", "target-feature=+sign-ext,-bulk-memory,-reference-types,-multivalue,-nontrapping-fptoint,-mutable-globals",
+  "-C", "link-arg=--no-entry",
+]

@@ -243,6 +243,7 @@ impl TraceBuilder {
             }],
             exports,
             entries,
+            output_words: BTreeMap::from([("main".to_owned(), 0)]),
             memory: MemoryLimits {
                 initial_pages: 0,
                 max_pages: 0,

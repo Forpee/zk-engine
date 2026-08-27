@@ -45,6 +45,7 @@ pub fn sample_program() -> IrProgram {
         }],
         exports,
         entries,
+        output_words: BTreeMap::from([("main".to_owned(), 0)]),
         memory: MemoryLimits {
             initial_pages: 1,
             max_pages: 1,

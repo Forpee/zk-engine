@@ -33,6 +33,8 @@ pub enum DecodeError {
     ElementTableIndex { index: u32, table: u32 },
     #[error("element segment {index} ({len} slots at {offset}) exceeds the table")]
     ElementOutOfBounds { index: u32, offset: u64, len: usize },
+    #[error("custom section `jolt.outputs.{export}` must hold one little-endian u32")]
+    MalformedOutputs { export: String },
 }
 
 /// Errors raised while lowering a decoded module to the register-machine IR.
@@ -63,4 +65,14 @@ pub enum LowerError {
     MemoryTooLarge { pages: u64, max: u64 },
     #[error("the function table has {slots} slots; at most {max} are supported")]
     TableTooLarge { slots: u64, max: u64 },
+    #[error("export `{export}` declares {words} memory output words; at most {max} fit")]
+    TooManyOutputs {
+        export: String,
+        words: u32,
+        max: u64,
+    },
+    #[error(
+        "export `{export}` declares memory outputs but does not return exactly one `i32` pointer"
+    )]
+    OutputsNeedPointer { export: String },
 }

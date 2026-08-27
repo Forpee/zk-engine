@@ -257,6 +257,12 @@ frontend and backend share only the IR crate:
 
 ### Acceptance Criteria
 
+- [x] MVP use case: blst's G1 scalar multiplication (`guests/bls-g1`,
+      memory-returned outputs via `jolt.outputs.<export>`) executes to the
+      native-blst result for full-width scalars and proves/verifies for a
+      small scalar (`crates/jolt-prover/tests/bls_g1_e2e.rs`); `profile
+      --name bls-g1` sizes the scalar to the requested scale.
+
 - [x] `WasmModule::decode` accepts the MVP integer core and rejects everything
       else with a typed error (`unsupported_operators_are_typed_errors`).
 - [x] Recursive calls, loops, `br_table`, `select`, block results carried by

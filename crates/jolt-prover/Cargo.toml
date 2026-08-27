@@ -84,6 +84,7 @@ jolt-profiling = { workspace = true, optional = true }
 
 [dev-dependencies]
 bincode.workspace = true
+blst.workspace = true
 jolt-dory.workspace = true
 jolt-wasm-frontend.workspace = true
 # Subscriber stack for tests; the profiling smoke test's summary usage

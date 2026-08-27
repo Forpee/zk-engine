@@ -77,6 +77,10 @@ pub struct WasmModule {
     pub data: Vec<DataSegment>,
     pub table: Option<TableDecl>,
     pub elements: Vec<ElementSegment>,
+    /// Exports returning their results through memory: name → number of
+    /// `u64` words at the returned pointer (custom section
+    /// `jolt.outputs.<name>`, a little-endian `u32`).
+    pub memory_outputs: BTreeMap<String, u32>,
     /// Exported functions by name.
     pub exports: BTreeMap<String, u32>,
     pub start: Option<u32>,
@@ -236,6 +240,16 @@ impl WasmModule {
                     }
                 }
                 Payload::StartSection { func, .. } => module.start = Some(func),
+                Payload::CustomSection(section) => {
+                    if let Some(export) = section.name().strip_prefix("jolt.outputs.") {
+                        let words = <[u8; 4]>::try_from(section.data())
+                            .map(u32::from_le_bytes)
+                            .map_err(|_| DecodeError::MalformedOutputs {
+                                export: export.to_owned(),
+                            })?;
+                        let _ = module.memory_outputs.insert(export.to_owned(), words);
+                    }
+                }
                 Payload::DataSection(reader) => {
                     for (index, data) in reader.into_iter().enumerate() {
                         let data = data?;

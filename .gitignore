@@ -79,3 +79,6 @@ transpiler/go/class_*/
 # generated docs and scripts
 docs/
 scripts/ci-local.sh
+
+# Guest crates build out of tree (scripts/build_guests.sh)
+guests/*/target/

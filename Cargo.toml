@@ -194,6 +194,8 @@ proc-macro2 = "1.0.79"
 
 # Testing
 criterion = { version = "0.8.2", features = ["html_reports"] }
+# Host-side oracle for the BLS12-381 guest (`guests/bls-g1`).
+blst = "0.3.17"
 
 # Internal dependencies
 jolt-blindfold = { path = "./crates/jolt-blindfold" }
