@@ -6,14 +6,11 @@
 //!   [`VerifierTranscript`], [`OptimizedChallenge`]) — implemented directly
 //!   on `spongefish::ProverState` / `spongefish::VerifierState`. Use these
 //!   for new code.
-//! - **Source-compatible facade** ([`Transcript`], [`AppendToTranscript`],
-//!   [`Blake2bTranscript`], [`KeccakTranscript`], [`PoseidonTranscript`]) —
-//!   preserved for `jolt-sumcheck`, `jolt-openings`, and `jolt-crypto`. Will
-//!   be retired once `jolt-prover-legacy` migrates to the split-trait surface.
+//! - **Label/append facade** ([`Transcript`], [`AppendToTranscript`],
+//!   [`Blake2bTranscript`]) — the surface the proof stack (`jolt-sumcheck`,
+//!   `jolt-openings`, `jolt-crypto`, `jolt-verifier`, `jolt-prover`) uses.
 //!
-//! Three sponges feature-gated: `transcript-blake2b` (spongefish
-//! `Blake2b512`), `transcript-keccak` (spongefish `Keccak`),
-//! `transcript-poseidon` (local Circom-compatible BN254 [`PoseidonSponge`]).
+//! One sponge: spongefish `Blake2b512`.
 
 #![deny(missing_docs)]
 // In the jolt-verifier runtime closure: stricter panic and unsafe discipline
@@ -33,16 +30,12 @@
 )]
 
 mod codec;
-mod digest;
 mod legacy;
-#[cfg(feature = "transcript-poseidon")]
-mod poseidon;
 mod prover;
 mod setup;
 mod verifier;
 
 pub use codec::BytesMsg;
-pub use digest::DigestTranscript;
 pub use legacy::{
     append_length_prefixed, AppendToTranscript, Label, LabelWithCount, SpongeTranscript,
     Transcript, U64Word, MAX_LABEL_LEN,
@@ -56,28 +49,9 @@ pub mod domain {
     pub use crate::legacy::{Label, LabelWithCount, U64Word};
 }
 
-#[cfg(feature = "transcript-poseidon")]
-pub use poseidon::PoseidonSponge;
 pub use prover::{OptimizedChallenge, ProverTranscript};
 pub use verifier::VerifierTranscript;
 
 /// Fiat-Shamir transcript backed by Blake2b-512 (spongefish duplex sponge).
-#[cfg(feature = "transcript-blake2b")]
 pub type Blake2bTranscript<F = jolt_field::Fr> =
     SpongeTranscript<spongefish::instantiations::Blake2b512, F>;
-
-/// Blake2b-256 chained-digest transcript, byte-compatible with `jolt-prover-legacy`'s
-/// `Blake2bTranscript`. Required to verify proofs produced by `jolt-prover-legacy`
-/// provers; new modular protocols should use [`Blake2bTranscript`] instead.
-#[cfg(feature = "transcript-blake2b")]
-pub type LegacyBlake2bTranscript<F = jolt_field::Fr> =
-    DigestTranscript<blake2::Blake2b<blake2::digest::consts::U32>, F>;
-
-/// Fiat-Shamir transcript backed by Keccak-f1600 (spongefish duplex sponge).
-#[cfg(feature = "transcript-keccak")]
-pub type KeccakTranscript<F = jolt_field::Fr> =
-    SpongeTranscript<spongefish::instantiations::Keccak, F>;
-
-/// Fiat-Shamir transcript backed by Circom-compatible BN254 Poseidon.
-#[cfg(feature = "transcript-poseidon")]
-pub type PoseidonTranscript<F = jolt_field::Fr> = SpongeTranscript<PoseidonSponge, F>;

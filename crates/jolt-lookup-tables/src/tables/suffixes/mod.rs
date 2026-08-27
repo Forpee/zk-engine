@@ -10,107 +10,53 @@
 
 use crate::lookup_bits::LookupBits;
 
-mod align_addr;
 mod and;
 mod andnot;
 mod clz_low;
 mod ctz_low;
-mod div_by_zero;
 mod eq;
-mod gt;
 mod left_is_zero;
 mod left_shift;
-mod left_shift_w;
-mod left_shift_w_helper;
 mod lower_half_word;
 mod lower_word;
-mod lsb;
 mod lt;
 mod one;
 mod or;
 mod overflow_bits_zero;
-mod pext;
-mod pext_helper;
 mod popcnt;
 mod pow2;
-mod pow2_offset_b;
-mod pow2_offset_h;
-mod pow2_offset_w;
-mod pow2_w;
-mod rev8w;
 mod right_is_zero;
 mod right_operand;
-mod right_operand_w;
 mod right_shift;
 mod right_shift_helper;
-mod right_shift_padding;
-mod right_shift_w;
-mod right_shift_w_helper;
 mod sign_extension;
-mod sign_extension_right_operand;
 mod sign_extension_upper_half;
-mod sign_extension_w;
-mod two_lsb;
-mod upper_word;
-mod window_sign;
-mod window_sign_pow2;
-mod x31_y0;
 mod xor;
-mod xor_rot;
-mod xor_rotw;
 
-use align_addr::AlignAddrSuffix;
 use and::AndSuffix;
 use andnot::AndNotSuffix;
 use clz_low::ClzLowSuffix;
 use ctz_low::CtzLowSuffix;
-use div_by_zero::DivByZeroSuffix;
 use eq::EqSuffix;
-use gt::GreaterThanSuffix;
 use left_is_zero::LeftOperandIsZeroSuffix;
 use left_shift::LeftShiftSuffix;
-use left_shift_w::LeftShiftWSuffix;
-use left_shift_w_helper::LeftShiftWHelperSuffix;
 use lower_half_word::LowerHalfWordSuffix;
 use lower_word::LowerWordSuffix;
-use lsb::LsbSuffix;
 use lt::LessThanSuffix;
 use one::OneSuffix;
 use or::OrSuffix;
 use overflow_bits_zero::OverflowBitsZeroSuffix;
-use pext::PextSuffix;
-use pext_helper::PextHelperSuffix;
 use popcnt::PopcntSuffix;
 // Shared bit-manipulation helpers: single source for the pext packing and
 // the window-sign convention, reused by the corresponding tables/prefixes.
-pub(crate) use pext::pext;
 use pow2::Pow2Suffix;
-use pow2_offset_b::Pow2OffsetBSuffix;
-use pow2_offset_h::Pow2OffsetHSuffix;
-use pow2_offset_w::Pow2OffsetWSuffix;
-use pow2_w::Pow2WSuffix;
-use rev8w::Rev8WSuffix;
 use right_is_zero::RightOperandIsZeroSuffix;
 use right_operand::RightOperandSuffix;
-use right_operand_w::RightOperandWSuffix;
 use right_shift::RightShiftSuffix;
 use right_shift_helper::RightShiftHelperSuffix;
-use right_shift_padding::RightShiftPaddingSuffix;
-use right_shift_w::RightShiftWSuffix;
-use right_shift_w_helper::RightShiftWHelperSuffix;
 use sign_extension::SignExtensionSuffix;
-use sign_extension_right_operand::SignExtensionRightOperandSuffix;
 use sign_extension_upper_half::SignExtensionUpperHalfSuffix;
-use sign_extension_w::SignExtensionWSuffix;
-use two_lsb::TwoLsbSuffix;
-use upper_word::UpperWordSuffix;
-pub(crate) use window_sign::window_sign_bit;
-use window_sign::WindowSignSuffix;
-use window_sign_pow2::WindowSignPow2Suffix;
-use x31_y0::X31Y0Suffix;
 use xor::XorSuffix;
-use xor_rot::XorRotSuffix;
-use xor_rotw::XorRotWSuffix;
 
 use jolt_field::JoltField;
 
@@ -137,56 +83,19 @@ pub enum Suffixes {
     Xor,
     Or,
     RightOperand,
-    RightOperandW,
-    UpperWord,
     LowerWord,
     LowerHalfWord,
     LessThan,
-    GreaterThan,
     Eq,
     LeftOperandIsZero,
     RightOperandIsZero,
-    Lsb,
-    DivByZero,
     Pow2,
-    Pow2W,
-    Rev8W,
-    RightShiftPadding,
     RightShift,
     RightShiftHelper,
     SignExtension,
     LeftShift,
-    TwoLsb,
     SignExtensionUpperHalf,
-    SignExtensionRightOperand,
-    RightShiftW,
-    RightShiftWHelper,
-    LeftShiftWHelper,
-    LeftShiftW,
     OverflowBitsZero,
-    XorRot16,
-    XorRot24,
-    XorRot32,
-    XorRot63,
-    XorRotW16,
-    XorRotW12,
-    XorRotW8,
-    XorRotW7,
-    Pow2OffsetW,
-    Pext,
-    PextHelper,
-    WindowSign,
-    WindowSignPow2,
-    XorRotW22,
-    XorRotW19,
-    XorRotW6,
-    /// SRAW sign-fill terms whose variables remain in the suffix.
-    SignExtensionW,
-    /// The suffix-owned product `x_{XLEN/2-1} * y_0` used by SRLW.
-    X31Y0,
-    Pow2OffsetB,
-    Pow2OffsetH,
-    AlignAddr,
     /// Population count of the left operand's suffix bits.
     Popcnt,
     /// Leading zeros of the left operand's suffix bits.
@@ -210,14 +119,9 @@ impl Suffixes {
             Suffixes::One
                 | Suffixes::Eq
                 | Suffixes::LessThan
-                | Suffixes::GreaterThan
                 | Suffixes::LeftOperandIsZero
                 | Suffixes::RightOperandIsZero
-                | Suffixes::Lsb
-                | Suffixes::TwoLsb
-                | Suffixes::DivByZero
                 | Suffixes::OverflowBitsZero
-                | Suffixes::WindowSign
         )
     }
 
@@ -230,54 +134,19 @@ impl Suffixes {
             Suffixes::Or => OrSuffix::suffix_mle(b),
             Suffixes::Xor => XorSuffix::suffix_mle(b),
             Suffixes::RightOperand => RightOperandSuffix::suffix_mle(b),
-            Suffixes::RightOperandW => RightOperandWSuffix::suffix_mle(b),
-            Suffixes::UpperWord => UpperWordSuffix::suffix_mle(b),
             Suffixes::LowerWord => LowerWordSuffix::suffix_mle(b),
             Suffixes::LowerHalfWord => LowerHalfWordSuffix::suffix_mle(b),
             Suffixes::LessThan => LessThanSuffix::suffix_mle(b),
-            Suffixes::GreaterThan => GreaterThanSuffix::suffix_mle(b),
             Suffixes::Eq => EqSuffix::suffix_mle(b),
             Suffixes::LeftOperandIsZero => LeftOperandIsZeroSuffix::suffix_mle(b),
             Suffixes::RightOperandIsZero => RightOperandIsZeroSuffix::suffix_mle(b),
-            Suffixes::Lsb => LsbSuffix::suffix_mle(b),
-            Suffixes::DivByZero => DivByZeroSuffix::suffix_mle(b),
             Suffixes::Pow2 => Pow2Suffix::suffix_mle(b),
-            Suffixes::Pow2W => Pow2WSuffix::suffix_mle(b),
-            Suffixes::Rev8W => Rev8WSuffix::suffix_mle(b),
-            Suffixes::RightShiftPadding => RightShiftPaddingSuffix::suffix_mle(b),
             Suffixes::RightShift => RightShiftSuffix::suffix_mle(b),
             Suffixes::RightShiftHelper => RightShiftHelperSuffix::suffix_mle(b),
             Suffixes::SignExtension => SignExtensionSuffix::suffix_mle(b),
             Suffixes::LeftShift => LeftShiftSuffix::suffix_mle(b),
-            Suffixes::TwoLsb => TwoLsbSuffix::suffix_mle(b),
             Suffixes::SignExtensionUpperHalf => SignExtensionUpperHalfSuffix::suffix_mle(b),
-            Suffixes::SignExtensionRightOperand => SignExtensionRightOperandSuffix::suffix_mle(b),
-            Suffixes::RightShiftW => RightShiftWSuffix::suffix_mle(b),
-            Suffixes::RightShiftWHelper => RightShiftWHelperSuffix::suffix_mle(b),
-            Suffixes::LeftShiftWHelper => LeftShiftWHelperSuffix::suffix_mle(b),
-            Suffixes::LeftShiftW => LeftShiftWSuffix::suffix_mle(b),
             Suffixes::OverflowBitsZero => OverflowBitsZeroSuffix::suffix_mle(b),
-            Suffixes::XorRot16 => XorRotSuffix::<16>::suffix_mle(b),
-            Suffixes::XorRot24 => XorRotSuffix::<24>::suffix_mle(b),
-            Suffixes::XorRot32 => XorRotSuffix::<32>::suffix_mle(b),
-            Suffixes::XorRot63 => XorRotSuffix::<63>::suffix_mle(b),
-            Suffixes::XorRotW7 => XorRotWSuffix::<7>::suffix_mle(b),
-            Suffixes::XorRotW8 => XorRotWSuffix::<8>::suffix_mle(b),
-            Suffixes::XorRotW12 => XorRotWSuffix::<12>::suffix_mle(b),
-            Suffixes::XorRotW16 => XorRotWSuffix::<16>::suffix_mle(b),
-            Suffixes::Pow2OffsetW => Pow2OffsetWSuffix::suffix_mle(b),
-            Suffixes::Pext => PextSuffix::suffix_mle(b),
-            Suffixes::PextHelper => PextHelperSuffix::suffix_mle(b),
-            Suffixes::WindowSign => WindowSignSuffix::suffix_mle(b),
-            Suffixes::WindowSignPow2 => WindowSignPow2Suffix::suffix_mle(b),
-            Suffixes::XorRotW22 => XorRotWSuffix::<22>::suffix_mle(b),
-            Suffixes::XorRotW19 => XorRotWSuffix::<19>::suffix_mle(b),
-            Suffixes::XorRotW6 => XorRotWSuffix::<6>::suffix_mle(b),
-            Suffixes::SignExtensionW => SignExtensionWSuffix::suffix_mle(b),
-            Suffixes::X31Y0 => X31Y0Suffix::suffix_mle(b),
-            Suffixes::Pow2OffsetB => Pow2OffsetBSuffix::suffix_mle(b),
-            Suffixes::Pow2OffsetH => Pow2OffsetHSuffix::suffix_mle(b),
-            Suffixes::AlignAddr => AlignAddrSuffix::suffix_mle(b),
             Suffixes::Popcnt => PopcntSuffix::suffix_mle(b),
             Suffixes::ClzLow => ClzLowSuffix::suffix_mle(b),
             Suffixes::CtzLow => CtzLowSuffix::suffix_mle(b),

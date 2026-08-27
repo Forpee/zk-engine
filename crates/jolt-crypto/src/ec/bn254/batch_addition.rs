@@ -21,7 +21,7 @@ pub fn batch_g1_additions_multi(bases: &[Bn254G1], indices_sets: &[Vec<usize>]) 
         return vec![];
     }
 
-    let projective: &[ark_bn254::G1Projective] = Bn254G1::as_inner_slice(bases);
+    let projective: &[ark_bn254::G1Projective] = as_inner_slice(bases);
     let affines = ark_bn254::G1Projective::normalize_batch(projective);
 
     batch_g1_additions_multi_affine_inner(&affines, indices_sets)
@@ -146,6 +146,20 @@ fn batch_g1_additions_multi_affine_inner(
         .into_iter()
         .map(|set| set.first().copied().unwrap_or_else(G1Affine::identity))
         .collect()
+}
+
+/// Reinterprets a wrapper slice as a slice of the inner arkworks type.
+#[inline(always)]
+fn as_inner_slice(slice: &[Bn254G1]) -> &[ark_bn254::G1Projective] {
+    // SAFETY: `Bn254G1` is `#[repr(transparent)]` over `G1Projective` (size
+    // equality asserted at compile time in `mod.rs`), so a slice of wrappers
+    // has the identical layout as a slice of inner values.
+    unsafe {
+        ::std::slice::from_raw_parts(
+            slice.as_ptr().cast::<ark_bn254::G1Projective>(),
+            slice.len(),
+        )
+    }
 }
 
 #[cfg(test)]

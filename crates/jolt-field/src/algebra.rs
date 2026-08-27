@@ -208,44 +208,6 @@ pub trait Field: Ring {
     }
 }
 
-/// Metadata contract for a pseudo-Mersenne field `p = 2^k − c`.
-///
-/// The exponent `k` is [`CanonicalEncoding::MODULUS_BITS`]; implementing
-/// this contract lights up the generic machinery bounded on it (extension
-/// towers, packed backends).
-pub trait PseudoMersenne: Field + CanonicalEncoding {
-    /// Offset `c` in `2^k − c`.
-    const OFFSET: u128;
-
-    /// Degree-4 extension multiply kernel in the `[1, e1, e2, e3]` basis.
-    ///
-    /// Defaults to the generic coefficient schedule; base fields whose
-    /// representation supports fusing product sums before reduction
-    /// override it (`Fp32` accumulates raw products in `u128`).
-    #[inline(always)]
-    fn ext4_mul(a: [Self; 4], b: [Self; 4]) -> [Self; 4] {
-        crate::schedules::ext4_mul_coeffs(a, b)
-    }
-
-    /// Degree-4 extension squaring kernel in the `[1, e1, e2, e3]` basis.
-    #[inline(always)]
-    fn ext4_square(a: [Self; 4]) -> [Self; 4] {
-        crate::schedules::ext4_square_coeffs(a)
-    }
-
-    /// Degree-8 extension multiply kernel in the `[1, e1, ..., e7]` basis.
-    #[inline(always)]
-    fn ext8_mul(a: [Self; 8], b: [Self; 8]) -> [Self; 8] {
-        crate::schedules::ext8_mul_coeffs(a, b)
-    }
-
-    /// Degree-8 extension squaring kernel in the `[1, e1, ..., e7]` basis.
-    #[inline(always)]
-    fn ext8_square(a: [Self; 8]) -> [Self; 8] {
-        crate::schedules::ext8_square_coeffs(a)
-    }
-}
-
 /// Fixed-size canonical little-endian byte encoding: the transcript
 /// absorption surface.
 ///

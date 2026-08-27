@@ -3,7 +3,6 @@
 //! through `to_bytes_le`, whose faithfulness is pinned by the golden
 //! fixtures in golden_bytes.rs.
 
-#![cfg(feature = "bn254")]
 #![expect(clippy::unwrap_used, reason = "test code")]
 
 use jolt_field as two;

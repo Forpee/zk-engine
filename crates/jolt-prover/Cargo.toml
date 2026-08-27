@@ -54,9 +54,9 @@ jolt-blindfold = { workspace = true, optional = true }
 jolt-claims.workspace = true
 jolt-crypto.workspace = true
 jolt-field.workspace = true
-jolt-kernels = { workspace = true, default-features = false }
+jolt-kernels.workspace = true
 jolt-openings.workspace = true
-jolt-poly = { workspace = true, default-features = false }
+jolt-poly.workspace = true
 jolt-sumcheck.workspace = true
 jolt-transcript.workspace = true
 jolt-verifier.workspace = true
@@ -78,9 +78,9 @@ bincode = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 jolt-dory = { workspace = true, optional = true }
-# default-features = false: the `profiling` feature adds `summary`
+# The workspace entry disables `summary`: the `profiling` feature adds it
 # explicitly; `allocative` needs only the flamegraph hooks.
-jolt-profiling = { workspace = true, optional = true, default-features = false }
+jolt-profiling = { workspace = true, optional = true }
 
 [dev-dependencies]
 bincode.workspace = true
@@ -88,7 +88,7 @@ jolt-dory.workspace = true
 jolt-wasm-frontend.workspace = true
 # Subscriber stack for tests; the profiling smoke test's summary usage
 # arrives via the `profiling` feature's `jolt-profiling/summary`.
-jolt-profiling = { workspace = true, default-features = false }
+jolt-profiling.workspace = true
 rand_core = { workspace = true, features = ["getrandom"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }

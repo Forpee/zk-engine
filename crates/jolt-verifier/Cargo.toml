@@ -12,19 +12,14 @@ categories = ["cryptography"]
 workspace = true
 
 [features]
-default = ["transcript-blake2b"]
 # Heap flamegraph visitation of the stage clear-output carriers (profile
 # harness's per-stage SVGs).
 allocative = ["dep:allocative", "jolt-claims/allocative"]
 fs-audit = []
 zk = []
-transcript-blake2b = []
-transcript-keccak = []
-transcript-poseidon = []
 
 [dependencies]
 allocative = { workspace = true, optional = true }
-ark-serialize.workspace = true
 jolt-blindfold.workspace = true
 jolt-claims.workspace = true
 jolt-claims-derive.workspace = true
@@ -35,7 +30,6 @@ jolt-poly.workspace = true
 jolt-r1cs.workspace = true
 jolt-sumcheck.workspace = true
 jolt-transcript.workspace = true
-jolt-utils.workspace = true
 jolt-verifier-derive.workspace = true
 jolt-wasm-ir = { workspace = true, features = ["serialization"] }
 jolt-wasm-program = { workspace = true, features = ["serialization"] }

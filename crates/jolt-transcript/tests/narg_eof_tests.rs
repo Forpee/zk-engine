@@ -5,7 +5,6 @@
 //!
 //! See PR #1455 review for the original report.
 
-#![cfg(feature = "transcript-blake2b")]
 #![expect(clippy::expect_used, reason = "tests")]
 
 use jolt_transcript::{prover_transcript, verifier_transcript, BytesMsg, PROTOCOL_ID};

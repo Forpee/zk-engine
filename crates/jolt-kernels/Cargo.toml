@@ -32,7 +32,7 @@ jolt-field.workspace = true
 jolt-kernels-derive.workspace = true
 jolt-lookup-tables.workspace = true
 jolt-openings.workspace = true
-jolt-poly = { workspace = true, default-features = false }
+jolt-poly.workspace = true
 jolt-r1cs.workspace = true
 jolt-sumcheck.workspace = true
 jolt-utils.workspace = true

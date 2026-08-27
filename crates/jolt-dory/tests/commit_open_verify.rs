@@ -16,7 +16,7 @@ use jolt_openings::{
     AdditivelyHomomorphic, CommitmentScheme, StreamingCommitment, ZkOpeningScheme,
 };
 use jolt_poly::{OneHotPolynomial, Polynomial};
-use jolt_transcript::{Blake2bTranscript, KeccakTranscript, Transcript};
+use jolt_transcript::{Blake2bTranscript, Transcript};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
@@ -60,13 +60,6 @@ fn commit_open_verify_various_sizes() {
     for num_vars in [2, 3, 4, 6] {
         round_trip::<Blake2bTranscript>(num_vars, 100 + num_vars as u64, b"cov-sizes");
     }
-}
-
-#[test]
-fn commit_open_verify_both_transcripts() {
-    let num_vars = 4;
-    round_trip::<Blake2bTranscript>(num_vars, 200, b"blake2b-rt");
-    round_trip::<KeccakTranscript>(num_vars, 200, b"keccak-rt");
 }
 
 #[test]
@@ -378,13 +371,6 @@ fn zk_round_trip_various_sizes() {
     for num_vars in [2, 3, 4, 6] {
         zk_round_trip::<Blake2bTranscript>(num_vars, 1100 + num_vars as u64, b"zk-cov-sizes");
     }
-}
-
-#[test]
-fn zk_round_trip_both_transcripts() {
-    let num_vars = 4;
-    zk_round_trip::<Blake2bTranscript>(num_vars, 1200, b"zk-blake2b-rt");
-    zk_round_trip::<KeccakTranscript>(num_vars, 1200, b"zk-keccak-rt");
 }
 
 #[test]

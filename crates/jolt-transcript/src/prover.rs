@@ -47,27 +47,15 @@ where
     }
 }
 
-/// 128-bit-truncating challenge decoder. Implemented for sponges where the
-/// optimization is sound (Blake2b, Keccak); deliberately not implemented
-/// for [`PoseidonSponge`](crate::PoseidonSponge), so calling it on a
-/// Poseidon-backed state is a compile error.
+/// 128-bit-truncating challenge decoder, sound for the Blake2b sponge
+/// (uniform output bytes). Deliberately not implemented for algebraic
+/// sponges whose squeezed field elements are not uniform bytes.
 pub trait OptimizedChallenge {
     /// Squeezes a 128-bit-truncated challenge as an [`Fr`].
     fn challenge_128(&mut self) -> Fr;
 }
 
-#[cfg(feature = "transcript-blake2b")]
 impl<R> OptimizedChallenge for ProverState<spongefish::instantiations::Blake2b512, R>
-where
-    R: RngCore + CryptoRng,
-{
-    fn challenge_128(&mut self) -> Fr {
-        Fr::from(ProverState::verifier_message::<u128>(self))
-    }
-}
-
-#[cfg(feature = "transcript-keccak")]
-impl<R> OptimizedChallenge for ProverState<spongefish::instantiations::Keccak, R>
 where
     R: RngCore + CryptoRng,
 {

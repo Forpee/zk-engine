@@ -13,8 +13,6 @@ workspace = true
 default = []
 test-utils = []
 parallel = ["dep:rayon", "jolt-utils/parallel"]
-# Inert: the RV64 field-inline witnesses are gone; dependents' feature lists
-# keep resolving until the RISC-V crates are deleted.
 
 [dependencies]
 jolt-claims.workspace = true
@@ -30,4 +28,4 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-jolt-field = { workspace = true, features = ["bn254"] }
+jolt-field = { workspace = true }

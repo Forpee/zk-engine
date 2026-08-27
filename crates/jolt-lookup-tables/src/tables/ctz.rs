@@ -1,6 +1,5 @@
 //! `ctz(x)`: trailing zeros of the left operand (`XLEN` when it is zero); the
-//! right operand is ignored. Used by the WebAssembly catalog; not part of the
-//! the RV64 table catalog.
+//! right operand is ignored.
 //!
 //! MLE: `Σ_k k · x_k · Π_{j<k} (1 − x_j) + XLEN · Π_j (1 − x_j)` with `x_k`
 //! the bit of weight `2^k`.

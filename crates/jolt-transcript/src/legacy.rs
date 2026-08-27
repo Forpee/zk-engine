@@ -1,9 +1,5 @@
-//! Source-compatible facade for `jolt-sumcheck`, `jolt-openings`, and
-//! `jolt-crypto`.
-//!
-//! Wraps a duplex sponge over each of the three backends and re-exposes
-//! the legacy `Transcript` / `AppendToTranscript` API. Removed once
-//! jolt-prover-legacy migrates to the split-trait surface.
+//! The label/append `Transcript` / `AppendToTranscript` facade over a
+//! spongefish duplex sponge — the surface the proof stack drives.
 
 use std::marker::PhantomData;
 
@@ -100,7 +96,7 @@ pub trait Transcript: Default + Sync + Send + 'static {
     /// Enables transcript comparison for tests; mirrors upstream's signature.
     /// Spongefish sponges have no replayable state history, so this is a
     /// no-op on the legacy facade — call sites already only use it under
-    /// `#[cfg(test)]` for debugging digest-based transcripts.
+    /// `#[cfg(test)]` for debugging transcripts.
     #[cfg(test)]
     fn compare_to(&mut self, _other: &Self) {}
 }
@@ -278,22 +274,16 @@ where
     }
 
     fn challenge(&mut self) -> F {
-        // WARNING: this squeezes 16 bytes for every sponge — including
-        // Poseidon — even though the split-trait surface (`OptimizedChallenge`,
-        // see `prover.rs:53-55`) deliberately makes 128-bit challenges a
-        // compile error on Poseidon-backed states. The two surfaces
-        // disagree on purpose: the legacy facade preserves the legacy
-        // jolt-prover-legacy challenge width for in-flight consumers (jolt-sumcheck,
-        // jolt-openings, jolt-crypto). Once those migrate to the split-trait
-        // surface this facade goes away and the inconsistency with it.
+        // 16-byte squeeze: the 128-bit challenge width every consumer's
+        // Fiat-Shamir schedule is pinned to.
         let mut buf = [0u8; 16];
         let _ = self.sponge.squeeze(&mut buf);
         F::from_challenge_bytes(&buf)
     }
 
     fn challenge_scalar(&mut self) -> F {
-        // Mirrors the digest transcript's scalar challenge: same 16-byte
-        // squeeze width as `challenge`, but the non-optimized decoding path.
+        // Same 16-byte squeeze width as `challenge`, but the non-optimized
+        // decoding path.
         let mut buf = [0u8; 16];
         let _ = self.sponge.squeeze(&mut buf);
         F::from_scalar_challenge_bytes(&buf)

@@ -25,6 +25,6 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 jolt-wasm-tables = { workspace = true }
-jolt-field = { workspace = true, features = ["bn254"] }
+jolt-field = { workspace = true }
 jolt-wasm-frontend = { workspace = true }
 wat = { workspace = true }

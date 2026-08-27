@@ -19,7 +19,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-jolt-field = { path = "../jolt-field", features = ["bn254"] }
+jolt-field = { path = "../jolt-field" }
 rand_chacha = { workspace = true }
 rand_core = { workspace = true }
 

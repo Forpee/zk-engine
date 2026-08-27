@@ -3,7 +3,6 @@
 //! `transcript_tests!` macro exercises only the `legacy::Transcript`
 //! facade.
 
-#![cfg(any(feature = "transcript-blake2b", feature = "transcript-keccak"))]
 #![expect(clippy::expect_used, reason = "tests")]
 
 use jolt_field::Fr;
@@ -12,7 +11,6 @@ use jolt_transcript::{prover_transcript, verifier_transcript, BytesMsg, Optimize
 const SESSION: &[u8] = b"native-traits";
 const INSTANCE: [u8; 32] = [0x77; 32];
 
-#[cfg(feature = "transcript-blake2b")]
 mod blake2b {
     use super::*;
     use spongefish::instantiations::Blake2b512;
@@ -74,25 +72,5 @@ mod blake2b {
             ca, cb,
             "distinct instance digests must yield distinct first challenge",
         );
-    }
-}
-
-#[cfg(feature = "transcript-keccak")]
-mod keccak {
-    use super::*;
-    use spongefish::instantiations::Keccak;
-
-    #[test]
-    fn prover_verifier_round_trip() {
-        let mut prover = prover_transcript(SESSION, INSTANCE, Keccak::default());
-        prover.prover_message(&BytesMsg(b"a".to_vec()));
-        let _c: Fr = prover.challenge_128();
-        let narg = prover.narg_string().to_vec();
-
-        let mut verifier = verifier_transcript(SESSION, INSTANCE, Keccak::default(), &narg);
-        let got: BytesMsg = verifier.prover_message().expect("ok");
-        assert_eq!(got.as_slice(), b"a");
-        let _c2: Fr = verifier.challenge_128();
-        verifier.check_eof().expect("eof");
     }
 }

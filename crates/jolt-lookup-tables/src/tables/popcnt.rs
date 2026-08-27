@@ -1,6 +1,5 @@
 //! `popcnt(x)`: population count of the left operand (the right operand is
-//! ignored). Used by the WebAssembly catalog; not part of the RV64
-//! the RV64 table catalog.
+//! ignored).
 
 use jolt_field::JoltField;
 use serde::{Deserialize, Serialize};

@@ -19,7 +19,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 jolt-dory.workspace = true
-jolt-crypto = { workspace = true, features = ["bn254"] }
+jolt-crypto = { workspace = true }
 rand.workspace = true
 rand_chacha.workspace = true
 rand_core.workspace = true

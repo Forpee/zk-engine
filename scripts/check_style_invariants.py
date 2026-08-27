@@ -45,12 +45,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Pre-existing split cfg_attr pairs deliberately left alone by the style pass
-# that introduced this rule ("predate this PR and are left alone", #1732).
-# Remove entries as the sites get folded.
-FOLDED_CFG_ATTR_EXEMPT = {
-    "crates/jolt-field/src/solinas/ext.rs",
-}
+FOLDED_CFG_ATTR_EXEMPT: set[str] = set()
 
 PRIMITIVE = r"(?:u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize|bool|char|f32|f64)"
 PRIMITIVE_CONTAINER = re.compile(

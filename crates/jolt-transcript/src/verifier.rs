@@ -56,15 +56,7 @@ where
     }
 }
 
-#[cfg(feature = "transcript-blake2b")]
 impl OptimizedChallenge for VerifierState<'_, spongefish::instantiations::Blake2b512> {
-    fn challenge_128(&mut self) -> Fr {
-        Fr::from(VerifierState::verifier_message::<u128>(self))
-    }
-}
-
-#[cfg(feature = "transcript-keccak")]
-impl OptimizedChallenge for VerifierState<'_, spongefish::instantiations::Keccak> {
     fn challenge_128(&mut self) -> Fr {
         Fr::from(VerifierState::verifier_message::<u128>(self))
     }
