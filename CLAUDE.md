@@ -81,6 +81,46 @@ The span taxonomy (versioned, normative) lives in `crates/jolt-profiling/src/tax
 
 ## Architecture
 
+### zkWASM Direction
+
+The repo is being re-targeted from RISC-V to WebAssembly (decided 2026-08-27; RISC-V
+support is being abandoned, not maintained). The WASM stack is four crates — see
+`specs/zkwasm-frontend.md`:
+
+- **crates/jolt-wasm-ir** (no deps): the contract between frontend and backend —
+  `Ir`/`IrProgram` (`ir.rs`) whose ALU vocabulary `AluOp` *is* the lookup-table catalog
+  (one variant per table, with an `OperandMode`; `AluOp::evaluate` is the reference
+  semantics), guest address-space layout constants (`layout.rs`)
+- **crates/jolt-wasm-frontend** (`wasmparser`): `WasmModule::decode` (validate, tag each
+  operator with its static operand-stack height) and `WasmModule::lower` → `IrProgram`.
+  The lowering is an instruction selector: stack slots are static registers from
+  `Reg::FRAME_BASE` (`ZERO`, `SP`, `RA`, `T0..T4` reserved), calls spill to a RAM shadow
+  stack, and every WASM operator without a table (`div`/`rem`, `shl`/`rotl`, sub-word
+  memory, byte sign-extension, 32-bit signed compares) is expanded over catalog rows +
+  `Advice` + `Assert` (list in `lower.rs` module docs). Add operators the same way, never
+  as new opaque ops
+- **crates/jolt-wasm-backend**: guest `Memory`, the reference `Machine` emitting one
+  `Record` per instruction, and the proof-row model — `RowModel::row_spec` gives each
+  `Ir` its `RowFlags` + operands + `Lookup`; `check_record` is the constraint-form spec
+  of the WASM uniform R1CS. Every record RAM access is an aligned 64-bit word (Twist stays
+  doubleword-addressable)
+- **crates/jolt-wasm-tables**: `WasmTable` — the WASM table catalog (the analogue of the
+  RV64 `LookupTableKind`, kept separate because the legacy prover mirrors that enum),
+  `WasmTable::of(AluOp)`, `lookup_index`. The WASM-only tables `clz`/`ctz`/`popcnt` live
+  in `jolt-lookup-tables` (`tables/{clz,ctz,popcnt}.rs` + prefixes/suffixes) but are
+  deliberately not in `LookupTableKind`
+
+The frontend never depends on the backend and vice versa (the backend's and tables'
+e2e tests use the frontend as a dev-dependency only).
+
+```bash
+cargo nextest run -p jolt-wasm-ir -p jolt-wasm-frontend -p jolt-wasm-backend -p jolt-wasm-tables --cargo-quiet
+cargo clippy -p jolt-wasm-ir -p jolt-wasm-frontend -p jolt-wasm-backend -p jolt-wasm-tables --all-targets -q -- -D warnings
+cargo nextest run -p jolt-lookup-tables --cargo-quiet -E 'test(/tables::(clz|ctz|popcnt)::/)'
+```
+
+Everything below describes the RISC-V stack that the WASM records will replace.
+
 ### Crate Structure
 
 The workspace is mid-decomposition: `crates/` holds the modular stack (jolt-verifier, jolt-prover, jolt-sumcheck, jolt-poly, jolt-blindfold, jolt-witness, jolt-openings, jolt-r1cs, jolt-dory, jolt-transcript, jolt-utils, …26 crates), while **crates/jolt-prover-legacy** is the legacy monolith mapped below. Top-level crates: `tracer`, `jolt-sdk`, `jolt-inlines`, `common`.

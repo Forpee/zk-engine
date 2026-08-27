@@ -43,6 +43,10 @@ members = [
   "crates/jolt-dory",
   "crates/jolt-riscv",
   "crates/jolt-tracer-x86",
+  "crates/jolt-wasm-ir",
+  "crates/jolt-wasm-frontend",
+  "crates/jolt-wasm-backend",
+  "crates/jolt-wasm-tables",
   "crates/jolt-transcript",
   "crates/jolt-utils",
   "crates/jolt-profiling",
@@ -301,6 +305,8 @@ clap = { version = "4.6.1", features = ["derive"] }
 eyre = "0.6.12"
 anyhow = "1.0.97"
 thiserror = "2.0.18"
+wasmparser = { version = "0.258.0", default-features = false, features = ["validate", "std"] }
+wat = "1.258.0"
 derive_more = { version = "2.0.1", features = [
   "from",
 ], default-features = false }
@@ -442,6 +448,10 @@ jolt-sumcheck = { path = "./crates/jolt-sumcheck" }
 jolt-riscv = { path = "./crates/jolt-riscv", default-features = false }
 jolt-program = { path = "./crates/jolt-program", default-features = false }
 jolt-tracer-x86 = { path = "./crates/jolt-tracer-x86" }
+jolt-wasm-ir = { path = "./crates/jolt-wasm-ir" }
+jolt-wasm-frontend = { path = "./crates/jolt-wasm-frontend" }
+jolt-wasm-backend = { path = "./crates/jolt-wasm-backend" }
+jolt-wasm-tables = { path = "./crates/jolt-wasm-tables" }
 jolt-lookup-tables = { path = "./crates/jolt-lookup-tables" }
 jolt-platform = { path = "./jolt-platform", default-features = false }
 jolt-sdk = { path = "./jolt-sdk", default-features = false }

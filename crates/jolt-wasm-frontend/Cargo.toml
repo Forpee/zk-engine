@@ -1,0 +1,20 @@
+[package]
+name = "jolt-wasm-frontend"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "WebAssembly frontend for Jolt: module decode, validation, and lowering to the register-machine IR"
+repository = "https://github.com/a16z/jolt"
+keywords = ["SNARK", "zkvm", "wasm"]
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+[dependencies]
+jolt-wasm-ir = { workspace = true }
+thiserror = { workspace = true }
+wasmparser = { workspace = true }
+
+[dev-dependencies]
+wat = { workspace = true }

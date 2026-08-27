@@ -13,6 +13,8 @@ use crate::lookup_bits::LookupBits;
 mod align_addr;
 mod and;
 mod andnot;
+mod clz_low;
+mod ctz_low;
 mod div_by_zero;
 mod eq;
 mod gt;
@@ -29,6 +31,7 @@ mod or;
 mod overflow_bits_zero;
 mod pext;
 mod pext_helper;
+mod popcnt;
 mod pow2;
 mod pow2_offset_b;
 mod pow2_offset_h;
@@ -59,6 +62,8 @@ mod xor_rotw;
 use align_addr::AlignAddrSuffix;
 use and::AndSuffix;
 use andnot::AndNotSuffix;
+use clz_low::ClzLowSuffix;
+use ctz_low::CtzLowSuffix;
 use div_by_zero::DivByZeroSuffix;
 use eq::EqSuffix;
 use gt::GreaterThanSuffix;
@@ -75,6 +80,7 @@ use or::OrSuffix;
 use overflow_bits_zero::OverflowBitsZeroSuffix;
 use pext::PextSuffix;
 use pext_helper::PextHelperSuffix;
+use popcnt::PopcntSuffix;
 // Shared bit-manipulation helpers: single source for the pext packing and
 // the window-sign convention, reused by the corresponding tables/prefixes.
 pub(crate) use pext::pext;
@@ -181,6 +187,12 @@ pub enum Suffixes {
     Pow2OffsetB,
     Pow2OffsetH,
     AlignAddr,
+    /// Population count of the left operand's suffix bits.
+    Popcnt,
+    /// Leading zeros of the left operand's suffix bits.
+    ClzLow,
+    /// Trailing zeros of the left operand's suffix bits.
+    CtzLow,
 }
 
 /// Total number of suffix variants.
@@ -266,6 +278,9 @@ impl Suffixes {
             Suffixes::Pow2OffsetB => Pow2OffsetBSuffix::suffix_mle(b),
             Suffixes::Pow2OffsetH => Pow2OffsetHSuffix::suffix_mle(b),
             Suffixes::AlignAddr => AlignAddrSuffix::suffix_mle(b),
+            Suffixes::Popcnt => PopcntSuffix::suffix_mle(b),
+            Suffixes::ClzLow => ClzLowSuffix::suffix_mle(b),
+            Suffixes::CtzLow => CtzLowSuffix::suffix_mle(b),
         }
     }
 

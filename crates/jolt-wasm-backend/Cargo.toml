@@ -1,0 +1,20 @@
+[package]
+name = "jolt-wasm-backend"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Execution backend for the Jolt WebAssembly IR: interpreter, execution records, and the proof-row model"
+repository = "https://github.com/a16z/jolt"
+keywords = ["SNARK", "zkvm", "wasm"]
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+[dependencies]
+jolt-wasm-ir = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+jolt-wasm-frontend = { workspace = true }
+wat = { workspace = true }

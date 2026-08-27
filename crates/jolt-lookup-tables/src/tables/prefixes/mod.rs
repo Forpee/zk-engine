@@ -10,6 +10,8 @@
 pub mod align_addr;
 pub mod and;
 pub mod andn;
+pub mod clz;
+pub mod ctz;
 pub mod div_by_zero;
 pub mod eq;
 pub mod left_is_zero;
@@ -26,6 +28,7 @@ pub mod lsb;
 pub mod lt;
 pub mod or;
 pub mod overflow_bits_zero;
+pub mod popcnt;
 pub mod pow2;
 pub mod pow2_offset;
 pub mod pow2_w;
@@ -173,6 +176,12 @@ pub enum Prefixes {
     Pow2OffsetB,
     Pow2OffsetH,
     AlignAddr,
+    /// Population count of the left operand's bound bits.
+    Popcnt,
+    /// Leading zeros of the left operand's bound bits (see `ClzPrefix`).
+    Clz,
+    /// Trailing zeros of the left operand's bound bits (see `CtzPrefix`).
+    Ctz,
 }
 
 /// Total number of prefix variants.
@@ -241,6 +250,9 @@ macro_rules! dispatch_prefix {
             Prefixes::Pow2OffsetB => Pow2OffsetPrefix::<0>::$method($($args),*),
             Prefixes::Pow2OffsetH => Pow2OffsetPrefix::<1>::$method($($args),*),
             Prefixes::AlignAddr => AlignAddrPrefix::$method($($args),*),
+            Prefixes::Popcnt => popcnt::PopcntPrefix::$method($($args),*),
+            Prefixes::Clz => clz::ClzPrefix::$method($($args),*),
+            Prefixes::Ctz => ctz::CtzPrefix::$method($($args),*),
         }
     };
 }

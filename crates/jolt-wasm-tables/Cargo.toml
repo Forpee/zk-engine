@@ -1,0 +1,25 @@
+[package]
+name = "jolt-wasm-tables"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The WebAssembly lookup-table catalog: every jolt-wasm-ir AluOp realized as a prefix-suffix-decomposable Jolt lookup table"
+repository = "https://github.com/a16z/jolt"
+keywords = ["SNARK", "zkvm", "wasm"]
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+[dependencies]
+jolt-field = { workspace = true }
+jolt-lookup-tables = { workspace = true }
+jolt-wasm-ir = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+strum = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+jolt-wasm-backend = { workspace = true }
+jolt-wasm-frontend = { workspace = true }
+rand = { workspace = true }
+wat = { workspace = true }
