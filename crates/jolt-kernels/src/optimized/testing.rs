@@ -249,6 +249,7 @@ impl TraceBuilder {
             },
             globals: Vec::new(),
             data: Vec::new(),
+            table: Vec::new(),
         };
         let mut program_memory = self.program_memory;
         program_memory.sort_by_key(|word| word.address);

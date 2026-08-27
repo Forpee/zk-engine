@@ -6,7 +6,18 @@
 //! forward/backward jumps; values carried by a branch are moved down to the
 //! target label's base height.
 //!
-//! Calling convention (all static at the call site):
+//! Operand forwarding: `local.get` and `*.const` emit nothing — the stack
+//! slot is marked *pending* ([`FunctionCtx::pending`]) and the consuming
+//! operator reads the local's register, or takes the constant as its
+//! immediate, directly. Pending slots are materialized (one `mov`/`const`)
+//! before anything that observes the register file positionally: control
+//! flow, calls, `return`, and a `local.set`/`tee` of the local they alias.
+//! Symmetrically, an operator followed by `local.set`/`tee` writes the local
+//! directly.
+//!
+//! Calling convention (static at the call site; `call_indirect` resolves the
+//! callee's entry pc from the function table in guest RAM — see
+//! [`Emitter::emit_indirect_target`] — and jumps through a register):
 //! 1. spill the caller's live frame slots `0..live` to the shadow stack at
 //!    `SP + 8*i`, then the return address at `SP + 8*live`;
 //! 2. load the callee's parameters (frame slots `0..P`) from the spilled
@@ -28,25 +39,31 @@
 //! - `extend8_s`/`extend16_s` = multiply up then `Sra` by a constant bitmask;
 //! - `clz`/`ctz`/`popcnt` are tables (32-bit `clz` subtracts 32, 32-bit
 //!   `ctz` sets bit 32 first);
-//! - linear-memory accesses of any width/alignment: effective address,
-//!   bounds assert against the memory-size word, floor to the containing
-//!   doubleword, and word load(s)/store(s) of that doubleword *and the next*
-//!   combined with bitmask shifts (`s = 8·(addr & 7)`; the second word is
-//!   untouched by a non-crossing access, and the slack word past the end of
-//!   memory keeps it in bounds).
+//! - linear-memory accesses of any width/alignment (`layout::linear_address`:
+//!   one RAM cell per 4-byte wasm word): effective guest address `t`, a
+//!   one-row bounds assert `t < LIMIT_w` against the per-width limit
+//!   registers (`Reg::limit`, maintained by the entry stub and
+//!   `memory.grow`), floor to the cell, then a branch on the lane offset
+//!   `a & 3`: an access inside one wasm word (the common, aligned case) is
+//!   a plain cell read/write — shifted by `s = 8·(a & 3)` only for
+//!   sub-word widths — and an `i64` access is two cells; an access that
+//!   crosses a wasm word takes an out-of-line cold block spanning up to three
+//!   cells. Cold blocks are placed after the function body so the hot path
+//!   never jumps over them.
 
 use jolt_wasm_ir::layout::{
-    input_address, output_address, DEFAULT_MAX_PAGES, GLOBALS_BASE, LINEAR_MEMORY_BASE, MAX_PAGES,
-    MEMORY_SIZE_ADDR, PAGE_SIZE, SHADOW_STACK_BASE, TERMINATION_ADDR,
+    input_address, linear_address, output_address, table_slot_address, DEFAULT_MAX_PAGES,
+    GLOBALS_BASE, LINEAR_CELL_BYTES, MAX_PAGES, MAX_TABLE_SLOTS, MEMORY_SIZE_ADDR, PAGE_SIZE,
+    SHADOW_STACK_BASE, TABLE_SLOT_BYTES, TERMINATION_ADDR, WASM_WORD_BYTES, WORD_BYTES,
 };
 use jolt_wasm_ir::{
     shift_right_bitmask, AdviceHint, AluOp, AssertFailure, DataSegment, Ir, IrFunction, IrProgram,
-    MemoryLimits, Operand, Pc, Reg, Width, MAX_FRAME_SLOTS, MAX_RESULTS,
+    MemoryLimits, Operand, Pc, Reg, TableSlot, Width, MAX_FRAME_SLOTS, MAX_RESULTS,
 };
 
 use crate::error::LowerError;
-use crate::module::{Function, WasmModule};
-use crate::source::{BinaryOp, BlockSig, ConvertOp, MemWidth, UnaryOp, WasmOp};
+use crate::module::{FuncType, Function, WasmModule};
+use crate::source::{BinaryOp, BlockSig, ConvertOp, MemWidth, UnaryOp, ValType, WasmOp};
 
 impl WasmModule {
     /// Lower the validated module to the register-machine IR.
@@ -76,12 +93,24 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
         },
     };
 
+    let table_slots = module.table.map_or(0, |t| t.initial);
+    if table_slots > MAX_TABLE_SLOTS {
+        return Err(LowerError::TableTooLarge {
+            slots: table_slots,
+            max: MAX_TABLE_SLOTS,
+        });
+    }
+    let type_ids = canonical_type_ids(&module.types);
+
     let mut signatures = Vec::with_capacity(module.functions.len());
     for (index, function) in module.functions.iter().enumerate() {
         let index = index as u32;
         let ty = module
             .func_type(index)
             .map_err(|_| LowerError::FunctionIndex(index))?;
+        let id = *type_ids
+            .get(function.type_index as usize)
+            .ok_or(LowerError::FunctionIndex(index))?;
         let locals = ty.params.len() + function.locals.len();
         let slots = locals + function.max_height as usize;
         if slots > MAX_FRAME_SLOTS {
@@ -99,17 +128,35 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
             });
         }
         signatures.push(Signature {
+            id,
             params: ty.params.len() as u32,
             results: ty.results.len() as u32,
             locals: locals as u32,
             frame_slots: slots,
         });
     }
+    // The signature of a `call_indirect` type index that no function has:
+    // params/results from the type, no frame.
+    let type_signatures: Vec<Signature> = module
+        .types
+        .iter()
+        .zip(&type_ids)
+        .map(|(ty, id)| Signature {
+            id: *id,
+            params: ty.params.len() as u32,
+            results: ty.results.len() as u32,
+            locals: 0,
+            frame_slots: 0,
+        })
+        .collect();
 
     let mut emitter = Emitter {
         code: vec![Ir::Halt],
         call_fixups: Vec::new(),
+        cold: Vec::new(),
         signatures: &signatures,
+        type_signatures: &type_signatures,
+        table_slots,
         max_memory_bytes: memory.max_pages * PAGE_SIZE,
     };
     let mut functions = Vec::with_capacity(module.functions.len());
@@ -138,6 +185,28 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
             .entry;
         set_target(&mut emitter.code[pc as usize], entry);
     }
+    let mut table = vec![None; table_slots as usize];
+    for segment in &module.elements {
+        for (i, function) in segment.functions.iter().enumerate() {
+            let slot =
+                table
+                    .get_mut(segment.offset as usize + i)
+                    .ok_or(LowerError::TableTooLarge {
+                        slots: segment.offset + segment.functions.len() as u64,
+                        max: table_slots,
+                    })?;
+            *slot = match *function {
+                Some(f) => Some(TableSlot {
+                    entry: functions
+                        .get(f as usize)
+                        .ok_or(LowerError::FunctionIndex(f))?
+                        .entry,
+                    signature: signatures[f as usize].id,
+                }),
+                None => None,
+            };
+        }
+    }
 
     Ok(IrProgram {
         code: emitter.code,
@@ -154,11 +223,37 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
                 bytes: d.bytes.clone(),
             })
             .collect(),
+        table,
     })
+}
+
+/// One id per structurally distinct function type (`call_indirect` checks
+/// the callee's signature structurally, not by type index).
+fn canonical_type_ids(types: &[FuncType]) -> Vec<u32> {
+    let mut canonical: Vec<&FuncType> = Vec::new();
+    types
+        .iter()
+        .map(|ty| {
+            canonical.iter().position(|c| *c == ty).unwrap_or_else(|| {
+                canonical.push(ty);
+                canonical.len() - 1
+            }) as u32
+        })
+        .collect()
+}
+
+/// A call target: a function index, or a table slot held in a register with
+/// the expected signature.
+#[derive(Debug, Clone, Copy)]
+enum Callee {
+    Direct(u32),
+    Indirect { type_index: u32, index: Reg },
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Signature {
+    /// Canonical function-type id (see [`canonical_type_ids`]).
+    id: u32,
     params: u32,
     results: u32,
     /// Parameters plus declared locals.
@@ -199,10 +294,24 @@ impl Label {
     }
 }
 
+/// An out-of-line block for a rare case: the rows to emit after the function
+/// body, the branch at `entry_fixup` that jumps to it, and the pc the block
+/// jumps back to.
+struct ColdBlock {
+    entry_fixup: Pc,
+    rows: Vec<Ir>,
+    rejoin: Pc,
+}
+
 struct Emitter<'a> {
     code: Vec<Ir>,
     call_fixups: Vec<(Pc, u32)>,
+    cold: Vec<ColdBlock>,
     signatures: &'a [Signature],
+    /// Per type index: the signature a `call_indirect` expects.
+    type_signatures: &'a [Signature],
+    /// Slots of the function table (bounds of a `call_indirect` index).
+    table_slots: u64,
     /// The page cap in bytes: `memory.grow` past it fails.
     max_memory_bytes: u64,
 }
@@ -212,12 +321,35 @@ struct FunctionCtx {
     index: u32,
     sig: Signature,
     labels: Vec<Label>,
+    /// `pending[depth]`: operand-stack slot `depth` holds an unmaterialized
+    /// value (its register is stale).
+    pending: Vec<Option<Pending>>,
+}
+
+/// A stack value not yet written to its slot's register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    /// A copy of the local.
+    Local(u32),
+    Const(u64),
 }
 
 impl FunctionCtx {
     /// Register for operand-stack depth `depth` (0-based from the bottom).
     fn stack(&self, depth: u32) -> Result<Reg, LowerError> {
         self.slot(self.sig.locals + depth)
+    }
+
+    fn take_pending(&mut self, depth: u32) -> Option<Pending> {
+        self.pending.get_mut(depth as usize).and_then(Option::take)
+    }
+
+    fn set_pending(&mut self, depth: u32, value: Pending) {
+        let depth = depth as usize;
+        if self.pending.len() <= depth {
+            self.pending.resize(depth + 1, None);
+        }
+        self.pending[depth] = Some(value);
     }
 
     fn slot(&self, slot: u32) -> Result<Reg, LowerError> {
@@ -277,6 +409,55 @@ const fn assert(op: AluOp, failure: AssertFailure, rs1: Reg, rs2: Operand) -> Ir
     }
 }
 
+/// Guest bytes per wasm byte in linear memory (`layout::linear_address`).
+const CELLS_PER_BYTE: u64 = LINEAR_CELL_BYTES / WASM_WORD_BYTES;
+/// Mask selecting the lane offset `2·(a & 3)` of a guest linear address.
+const LANE_MASK: u64 = LINEAR_CELL_BYTES - CELLS_PER_BYTE;
+/// Bit shift per unit of lane offset: `s = 8·(a & 3) = 4 · (2·(a & 3))`.
+const SHIFT_PER_LANE: u64 = 8 / CELLS_PER_BYTE;
+const WASM_WORD_MASK: u64 = (1 << (8 * WASM_WORD_BYTES)) - 1;
+
+/// The bounds-limit register of a `width`-byte access.
+fn limit(width: MemWidth) -> Reg {
+    match width {
+        MemWidth::B1 => Reg::LIMIT_B,
+        MemWidth::B2 => Reg::LIMIT_H,
+        MemWidth::B4 => Reg::LIMIT_W,
+        MemWidth::B8 => Reg::LIMIT_D,
+    }
+}
+
+/// `rd` = the low `width` bytes of `rs`, extended to `result` bits.
+fn narrow_rows(rd: Reg, rs: Reg, width: MemWidth, signed: bool, result: Width) -> Vec<Ir> {
+    match (width, signed) {
+        (MemWidth::B8, _) => vec![Ir::mov(rd, rs)],
+        (_, false) => vec![Ir::alu_imm(AluOp::And, rd, rs, width.mask())],
+        (MemWidth::B1, true) => sign_extend_rows(result, rd, rs, 8),
+        (MemWidth::B2, true) => sign_extend_rows(result, rd, rs, 16),
+        (MemWidth::B4, true) => match result {
+            Width::W64 => vec![Ir::alu_imm(AluOp::SignExtendWord, rd, rs, 0)],
+            Width::W32 => vec![Ir::alu_imm(AluOp::And, rd, rs, width.mask())],
+        },
+    }
+}
+
+/// Sign-extend the low `bits` (8 or 16) of `rs` to `width`, canonical.
+fn sign_extend_rows(width: Width, rd: Reg, rs: Reg, bits: u64) -> Vec<Ir> {
+    let up = 64 - bits;
+    let (target, canonicalize) = match width {
+        Width::W64 => (rd, false),
+        Width::W32 => (Reg::T0, true),
+    };
+    let mut rows = vec![
+        mul64(target, rs, imm(1 << up)),
+        Ir::alu_imm(AluOp::Sra, target, target, shift_right_bitmask(up)),
+    ];
+    if canonicalize {
+        rows.push(Ir::alu_imm(AluOp::LowerHalfWord, rd, target, 0));
+    }
+    rows
+}
+
 /// `(i32::MIN, -1)` at `width`, the signed-division overflow pair.
 const fn signed_overflow_pair(width: Width) -> (u64, u64) {
     match width {
@@ -307,6 +488,87 @@ impl Emitter<'_> {
         set_target(&mut self.code[pc as usize], target);
     }
 
+    /// Write a pending value into its slot's register.
+    fn materialize(
+        &mut self,
+        ctx: &FunctionCtx,
+        depth: u32,
+        value: Pending,
+    ) -> Result<(), LowerError> {
+        let rd = ctx.stack(depth)?;
+        let _ = self.emit(match value {
+            Pending::Local(local) => Ir::mov(rd, ctx.slot(local)?),
+            Pending::Const(imm) => Ir::const_(rd, imm),
+        })?;
+        Ok(())
+    }
+
+    /// Materialize every pending slot.
+    fn materialize_all(&mut self, ctx: &mut FunctionCtx) -> Result<(), LowerError> {
+        for depth in 0..ctx.pending.len() {
+            if let Some(value) = ctx.pending[depth].take() {
+                self.materialize(ctx, depth as u32, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Materialize the pending slots aliasing `local` (about to be written).
+    fn materialize_local(&mut self, ctx: &mut FunctionCtx, local: u32) -> Result<(), LowerError> {
+        for depth in 0..ctx.pending.len() {
+            if ctx.pending[depth] == Some(Pending::Local(local)) {
+                ctx.pending[depth] = None;
+                self.materialize(ctx, depth as u32, Pending::Local(local))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The register holding the value at stack depth `depth`: the aliased
+    /// local for a pending copy, the slot itself otherwise (a pending
+    /// constant is written to it first). Consuming a value clears its
+    /// pending mark (the slot is popped or overwritten).
+    fn src(&mut self, ctx: &mut FunctionCtx, depth: u32) -> Result<Reg, LowerError> {
+        match ctx.take_pending(depth) {
+            Some(Pending::Local(local)) => ctx.slot(local),
+            Some(value @ Pending::Const(_)) => {
+                self.materialize(ctx, depth, value)?;
+                ctx.stack(depth)
+            }
+            None => ctx.stack(depth),
+        }
+    }
+
+    /// Like [`Self::src`], but a pending constant becomes an immediate.
+    fn src_operand(ctx: &mut FunctionCtx, depth: u32) -> Result<Operand, LowerError> {
+        match ctx.take_pending(depth) {
+            Some(Pending::Const(imm)) => Ok(Operand::Imm(imm)),
+            Some(Pending::Local(local)) => ctx.slot(local).map(Operand::Reg),
+            None => ctx.stack(depth).map(Operand::Reg),
+        }
+    }
+
+    /// The destination register of an operator producing the value at stack
+    /// depth `depth`: the local itself when the next operator is a
+    /// `local.set`/`tee` of it (which is then skipped), else the slot.
+    fn dest(
+        &mut self,
+        ctx: &mut FunctionCtx,
+        depth: u32,
+        next: Option<&WasmOp>,
+    ) -> Result<(Reg, bool), LowerError> {
+        match next {
+            Some(&(WasmOp::LocalSet(local) | WasmOp::LocalTee(local))) => {
+                self.materialize_local(ctx, local)?;
+                if matches!(next, Some(WasmOp::LocalTee(_))) {
+                    ctx.set_pending(depth, Pending::Local(local));
+                }
+                Ok((ctx.slot(local)?, true))
+            }
+            _ => Ok((ctx.stack(depth)?, false)),
+        }
+    }
+
     fn lower_function(&mut self, index: u32, function: &Function) -> Result<(), LowerError> {
         let sig = self.signatures[index as usize];
         let mut ctx = FunctionCtx {
@@ -321,17 +583,49 @@ impl Emitter<'_> {
                 },
                 fixups: Vec::new(),
             }],
+            pending: Vec::new(),
         };
         for slot in sig.params..sig.locals {
             let rd = ctx.slot(slot)?;
             let _ = self.emit(Ir::mov(rd, Reg::ZERO))?;
         }
-        for source in &function.body {
-            self.lower_op(&mut ctx, &source.op, source.height)?;
+        let mut skip = false;
+        for (i, source) in function.body.iter().enumerate() {
+            if std::mem::take(&mut skip) {
+                continue;
+            }
+            let next = function.body.get(i + 1).map(|s| &s.op);
+            skip = self.lower_op(&mut ctx, &source.op, source.height, next)?;
         }
         if !ctx.labels.is_empty() {
             return Err(LowerError::MalformedControl(index));
         }
+        self.flush_cold()
+    }
+
+    /// Place the pending cold blocks here (after a function body), patching
+    /// their entry branches and rejoin jumps.
+    fn flush_cold(&mut self) -> Result<(), LowerError> {
+        for block in std::mem::take(&mut self.cold) {
+            let start = self.pc()?;
+            self.patch(block.entry_fixup, start);
+            self.emit_all(block.rows)?;
+            let _ = self.emit(Ir::Jump {
+                target: block.rejoin,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Register a cold block entered from `entry_fixup` that rejoins at the
+    /// current pc.
+    fn cold(&mut self, entry_fixup: Pc, rows: Vec<Ir>) -> Result<(), LowerError> {
+        let rejoin = self.pc()?;
+        self.cold.push(ColdBlock {
+            entry_fixup,
+            rows,
+            rejoin,
+        });
         Ok(())
     }
 
@@ -397,11 +691,22 @@ impl Emitter<'_> {
         self.emit_all([load(Reg::RA, Reg::SP, -8), Ir::JumpReg { rs: Reg::RA }])
     }
 
-    fn emit_call(&mut self, ctx: &FunctionCtx, height: u32, callee: u32) -> Result<(), LowerError> {
-        let callee_sig = *self
-            .signatures
-            .get(callee as usize)
-            .ok_or(LowerError::FunctionIndex(callee))?;
+    fn emit_call(
+        &mut self,
+        ctx: &FunctionCtx,
+        height: u32,
+        callee: Callee,
+    ) -> Result<(), LowerError> {
+        let callee_sig = match callee {
+            Callee::Direct(function) => *self
+                .signatures
+                .get(function as usize)
+                .ok_or(LowerError::FunctionIndex(function))?,
+            Callee::Indirect { type_index, .. } => *self
+                .type_signatures
+                .get(type_index as usize)
+                .ok_or(LowerError::FunctionIndex(type_index))?,
+        };
         let (params, results) = (callee_sig.params, callee_sig.results);
         let live = ctx.sig.locals + height;
         let frame_bytes = u64::from(live + 1) * 8;
@@ -418,8 +723,20 @@ impl Emitter<'_> {
             let _ = self.emit(load(rd, Reg::SP, i64::from(args_base + j) * 8))?;
         }
         let _ = self.emit(add64(Reg::SP, Reg::SP, imm(frame_bytes)))?;
-        let jump_pc = self.emit(Ir::Jump { target: 0 })?;
-        self.call_fixups.push((jump_pc, callee));
+        match callee {
+            Callee::Direct(function) => {
+                let jump_pc = self.emit(Ir::Jump { target: 0 })?;
+                self.call_fixups.push((jump_pc, function));
+            }
+            Callee::Indirect { index, .. } => {
+                // `RA` is free again: its value is spilled, and the callee
+                // reloads it from the shadow stack on return. The index
+                // register is an operand-stack slot above the arguments, so
+                // the parameter loads did not touch it.
+                self.emit_indirect_target(index, callee_sig.id)?;
+                let _ = self.emit(Ir::JumpReg { rs: Reg::RA })?;
+            }
+        }
 
         let return_pc = self.pc()?;
         self.patch(ra_pc, return_pc);
@@ -431,13 +748,40 @@ impl Emitter<'_> {
         for k in 0..results {
             let rd = ctx.slot(args_base + k)?;
             let rs = Reg::temp(k as usize).ok_or(LowerError::TooManyResults {
-                function: callee,
+                function: ctx.index,
                 results: results as usize,
                 max: MAX_RESULTS,
             })?;
             let _ = self.emit(Ir::mov(rd, rs))?;
         }
         Ok(())
+    }
+
+    /// `RA` = the entry pc of function-table slot `index`, trapping when the
+    /// index is past the table or the slot's signature word is not
+    /// `signature + 1` (null slots hold `0`). Uses `T0` as scratch.
+    fn emit_indirect_target(&mut self, index: Reg, signature: u32) -> Result<(), LowerError> {
+        self.emit_all([
+            assert(
+                AluOp::LtU,
+                AssertFailure::TableOutOfBounds,
+                index,
+                imm(self.table_slots),
+            ),
+            mul64(Reg::RA, index, imm(TABLE_SLOT_BYTES)),
+            load(
+                Reg::T0,
+                Reg::RA,
+                (table_slot_address(0) + WORD_BYTES) as i64,
+            ),
+            assert(
+                AluOp::Eq,
+                AssertFailure::IndirectCallTypeMismatch,
+                Reg::T0,
+                imm(u64::from(signature) + 1),
+            ),
+            load(Reg::RA, Reg::RA, table_slot_address(0) as i64),
+        ])
     }
 
     /// The entry stub of exported `function`: from an all-zero register file,
@@ -454,22 +798,26 @@ impl Emitter<'_> {
         let ctx = FunctionCtx {
             index: function,
             sig: Signature {
+                id: sig.id,
                 params: 0,
                 results: 0,
                 locals: 0,
                 frame_slots: sig.params.max(sig.results) as usize,
             },
             labels: Vec::new(),
+            pending: Vec::new(),
         };
         let _ = self.emit(Ir::const_(Reg::SP, SHADOW_STACK_BASE + 8))?;
+        let _ = self.emit(load(Reg::T0, Reg::ZERO, MEMORY_SIZE_ADDR as i64))?;
+        self.emit_limits(Reg::T0)?;
         if let Some(start) = start {
-            self.emit_call(&ctx, 0, start)?;
+            self.emit_call(&ctx, 0, Callee::Direct(start))?;
         }
         for i in 0..sig.params {
             let rd = ctx.slot(i)?;
             let _ = self.emit(load(rd, Reg::ZERO, input_address(u64::from(i)) as i64))?;
         }
-        self.emit_call(&ctx, sig.params, function)?;
+        self.emit_call(&ctx, sig.params, Callee::Direct(function))?;
         for k in 0..sig.results {
             let value = ctx.slot(k)?;
             let _ = self.emit(store(Reg::ZERO, value, output_address(u64::from(k)) as i64))?;
@@ -494,10 +842,14 @@ impl Emitter<'_> {
             Ir::alu_imm(AluOp::LeU, Reg::T2, Reg::T1, self.max_memory_bytes),
         ])?;
         let fail = self.emit(Ir::branch_if_zero(Reg::T2, 0))?;
-        self.emit_all([
-            store(Reg::ZERO, Reg::T1, MEMORY_SIZE_ADDR as i64),
-            Ir::alu_imm(AluOp::Srl, rd, Reg::T0, shift_right_bitmask(16)),
-        ])?;
+        let _ = self.emit(store(Reg::ZERO, Reg::T1, MEMORY_SIZE_ADDR as i64))?;
+        self.emit_limits(Reg::T1)?;
+        let _ = self.emit(Ir::alu_imm(
+            AluOp::Srl,
+            rd,
+            Reg::T0,
+            shift_right_bitmask(16),
+        ))?;
         let done = self.emit(Ir::Jump { target: 0 })?;
         let fail_pc = self.pc()?;
         self.patch(fail, fail_pc);
@@ -507,29 +859,60 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// Effective guest address, bounds assert, then `T1` = the containing
-    /// doubleword's address and `T0` = `8·(addr & 7)`, the bit shift of the
-    /// access within it.
+    /// Set the bounds-limit registers from the memory size in bytes held in
+    /// `size`: `LIMIT_w = linear_address(size) − 2·w + 1`. Uses `T2`.
+    fn emit_limits(&mut self, size: Reg) -> Result<(), LowerError> {
+        let _ = self.emit(mul64(Reg::T2, size, imm(CELLS_PER_BYTE)))?;
+        for width in [MemWidth::B1, MemWidth::B2, MemWidth::B4, MemWidth::B8] {
+            let bytes = u64::from(width.bytes());
+            let _ = self.emit(add64(
+                limit(width),
+                Reg::T2,
+                imm(linear_address(0)
+                    .wrapping_sub(CELLS_PER_BYTE * bytes)
+                    .wrapping_add(1)),
+            ))?;
+        }
+        Ok(())
+    }
+
+    /// Effective guest address `T0 = linear_address(addr + offset)`, the
+    /// bounds assert, then `T1` = the containing cell's address and `T2` =
+    /// `2·(a & 3)`, the lane offset (in guest bytes) within it.
     fn emit_address(&mut self, addr: Reg, offset: u64, width: MemWidth) -> Result<(), LowerError> {
-        let bytes = u64::from(width.bytes());
         self.emit_all([
-            add64(Reg::T0, addr, imm(LINEAR_MEMORY_BASE.wrapping_add(offset))),
-            add64(
-                Reg::T2,
-                Reg::T0,
-                imm(bytes.wrapping_sub(LINEAR_MEMORY_BASE)),
-            ),
-            load(Reg::T1, Reg::ZERO, MEMORY_SIZE_ADDR as i64),
+            add64(Reg::T0, addr, reg(addr)),
+            add64(Reg::T0, Reg::T0, imm(linear_address(offset))),
             assert(
-                AluOp::LeU,
+                AluOp::LtU,
                 AssertFailure::OutOfBounds(width.bytes()),
-                Reg::T2,
-                reg(Reg::T1),
+                Reg::T0,
+                reg(limit(width)),
             ),
-            Ir::alu_imm(AluOp::And, Reg::T1, Reg::T0, !7),
-            Ir::alu_imm(AluOp::And, Reg::T0, Reg::T0, 7),
-            mul64(Reg::T0, Reg::T0, imm(8)),
+            Ir::alu_imm(AluOp::And, Reg::T2, Reg::T0, LANE_MASK),
+            Ir::alu_imm(AluOp::And, Reg::T1, Reg::T0, !(LINEAR_CELL_BYTES - 1)),
         ])
+    }
+
+    /// Branch to a cold block iff the access at lane offset `T2` of `width`
+    /// bytes crosses its wasm word (never for a byte). Returns the branch pc,
+    /// which [`Self::cold`] patches. `T4` is scratch.
+    fn emit_crossing_branch(&mut self, width: MemWidth) -> Result<Option<Pc>, LowerError> {
+        match width {
+            MemWidth::B1 => Ok(None),
+            MemWidth::B4 | MemWidth::B8 => self.emit(Ir::branch_if_nonzero(Reg::T2, 0)).map(Some),
+            MemWidth::B2 => {
+                // Crosses iff `a & 3 == 3`, i.e. `T2 == 6`.
+                let _ = self.emit(Ir::const_(Reg::T4, 5))?;
+                self.emit(Ir::Branch {
+                    op: AluOp::LtU,
+                    rs1: Reg::T4,
+                    rs2: Reg::T2,
+                    target: 0,
+                })
+                .map(Some)
+            }
+        }
     }
 
     /// Load `width` bytes at `addr + offset` into `rd`, sign- or
@@ -537,26 +920,67 @@ impl Emitter<'_> {
     fn emit_load(
         &mut self,
         rd: Reg,
+        addr: Reg,
         offset: u64,
         width: MemWidth,
         signed: bool,
         result: Width,
     ) -> Result<(), LowerError> {
-        self.emit_address(rd, offset, width)?;
-        // Low word >> s, high word << (64 - s) (zero when s = 0, via
-        // `(w · 2^(63-s)) · 2`), combined into T2.
-        self.emit_all([
-            load(Reg::T2, Reg::T1, 0),
-            Ir::alu_imm(AluOp::ShiftRightBitmask, Reg::T3, Reg::T0, 0),
-            Ir::alu(AluOp::Srl, Reg::T2, Reg::T2, reg(Reg::T3)),
-            load(Reg::T3, Reg::T1, 8),
-            Ir::alu_imm(AluOp::Xor, Reg::T4, Reg::T0, 63),
-            Ir::alu_imm(AluOp::Pow2, Reg::T4, Reg::T4, 0),
-            mul64(Reg::T3, Reg::T3, reg(Reg::T4)),
-            mul64(Reg::T3, Reg::T3, imm(2)),
-            Ir::alu(AluOp::Or, Reg::T2, Reg::T2, reg(Reg::T3)),
-        ])?;
-        self.emit_narrow(rd, Reg::T2, width, signed, result)
+        self.emit_address(addr, offset, width)?;
+        let crossing = self.emit_crossing_branch(width)?;
+        // Hot: the lane is inside one wasm word (one cell), or an aligned
+        // `i64` (two cells).
+        match width {
+            MemWidth::B8 => self.emit_all([
+                load(Reg::T3, Reg::T1, 0),
+                load(Reg::T4, Reg::T1, LINEAR_CELL_BYTES as i64),
+                mul64(Reg::T4, Reg::T4, imm(1 << 32)),
+                Ir::alu(AluOp::Or, rd, Reg::T3, reg(Reg::T4)),
+            ])?,
+            MemWidth::B4 if !signed => {
+                let _ = self.emit(load(rd, Reg::T1, 0))?;
+            }
+            MemWidth::B4 => {
+                let _ = self.emit(load(Reg::T3, Reg::T1, 0))?;
+                self.emit_narrow(rd, Reg::T3, width, signed, result)?;
+            }
+            MemWidth::B1 | MemWidth::B2 => {
+                self.emit_all([
+                    load(Reg::T3, Reg::T1, 0),
+                    mul64(Reg::T2, Reg::T2, imm(SHIFT_PER_LANE)),
+                    Ir::alu_imm(AluOp::ShiftRightBitmask, Reg::T4, Reg::T2, 0),
+                    Ir::alu(AluOp::Srl, Reg::T3, Reg::T3, reg(Reg::T4)),
+                ])?;
+                self.emit_narrow(rd, Reg::T3, width, signed, result)?;
+            }
+        }
+        // Cold: the lane crosses into the next wasm word(s): little-endian
+        // value `w0 >> s | w1 << (32 − s) [| w2 << (64 − s)]`.
+        if let Some(crossing) = crossing {
+            let mut cold = vec![
+                mul64(Reg::T2, Reg::T2, imm(SHIFT_PER_LANE)),
+                load(Reg::T3, Reg::T1, 0),
+                Ir::alu_imm(AluOp::ShiftRightBitmask, Reg::T4, Reg::T2, 0),
+                Ir::alu(AluOp::Srl, Reg::T3, Reg::T3, reg(Reg::T4)),
+                load(Reg::T4, Reg::T1, LINEAR_CELL_BYTES as i64),
+                Ir::const_(Reg::T0, 32),
+                Ir::alu(AluOp::Sub(Width::W64), Reg::T0, Reg::T0, reg(Reg::T2)),
+                Ir::alu_imm(AluOp::Pow2, Reg::T0, Reg::T0, 0),
+                mul64(Reg::T4, Reg::T4, reg(Reg::T0)),
+                Ir::alu(AluOp::Or, Reg::T3, Reg::T3, reg(Reg::T4)),
+            ];
+            if width == MemWidth::B8 {
+                cold.extend([
+                    load(Reg::T4, Reg::T1, 2 * LINEAR_CELL_BYTES as i64),
+                    mul64(Reg::T4, Reg::T4, reg(Reg::T0)),
+                    mul64(Reg::T4, Reg::T4, imm(1 << 32)),
+                    Ir::alu(AluOp::Or, Reg::T3, Reg::T3, reg(Reg::T4)),
+                ]);
+            }
+            cold.extend(narrow_rows(rd, Reg::T3, width, signed, result));
+            self.cold(crossing, cold)?;
+        }
+        Ok(())
     }
 
     /// `rd` = the low `width` bytes of `rs`, extended to `result` bits.
@@ -568,16 +992,7 @@ impl Emitter<'_> {
         signed: bool,
         result: Width,
     ) -> Result<(), LowerError> {
-        match (width, signed) {
-            (MemWidth::B8, _) => self.emit_all([Ir::mov(rd, rs)]),
-            (_, false) => self.emit_all([Ir::alu_imm(AluOp::And, rd, rs, width.mask())]),
-            (MemWidth::B1, true) => self.emit_sign_extend(result, rd, rs, 8),
-            (MemWidth::B2, true) => self.emit_sign_extend(result, rd, rs, 16),
-            (MemWidth::B4, true) => match result {
-                Width::W64 => self.emit_all([Ir::alu_imm(AluOp::SignExtendWord, rd, rs, 0)]),
-                Width::W32 => self.emit_all([Ir::alu_imm(AluOp::And, rd, rs, width.mask())]),
-            },
-        }
+        self.emit_all(narrow_rows(rd, rs, width, signed, result))
     }
 
     /// Sign-extend the low `bits` (8 or 16) of `rs` to `width`, canonical.
@@ -588,60 +1003,102 @@ impl Emitter<'_> {
         rs: Reg,
         bits: u64,
     ) -> Result<(), LowerError> {
-        let up = 64 - bits;
-        let (target, canonicalize) = match width {
-            Width::W64 => (rd, false),
-            Width::W32 => (Reg::T0, true),
-        };
-        self.emit_all([
-            mul64(target, rs, imm(1 << up)),
-            Ir::alu_imm(AluOp::Sra, target, target, shift_right_bitmask(up)),
-        ])?;
-        if canonicalize {
-            let _ = self.emit(Ir::alu_imm(AluOp::LowerHalfWord, rd, target, 0))?;
-        }
-        Ok(())
+        self.emit_all(sign_extend_rows(width, rd, rs, bits))
     }
 
-    /// Store the low `width` bytes of `value` at `base + offset`.
+    /// Store the low `width` bytes of `value` (an `i32`, or an `i64` when
+    /// `wide`) at `base + offset`.
     fn emit_store(
         &mut self,
         base: Reg,
         value: Reg,
+        wide: bool,
         offset: u64,
         width: MemWidth,
     ) -> Result<(), LowerError> {
         self.emit_address(base, offset, width)?;
+        let crossing = self.emit_crossing_branch(width)?;
         let mask = width.mask();
-        let bm1 = shift_right_bitmask(1);
-        // Low word: clear the target bytes, insert `value << s`.
-        self.emit_all([
-            load(Reg::T2, Reg::T1, 0),
-            Ir::alu_imm(AluOp::Pow2, Reg::T4, Reg::T0, 0),
-            Ir::const_(Reg::T3, mask),
-            mul64(Reg::T3, Reg::T3, reg(Reg::T4)),
-            Ir::alu(AluOp::Andn, Reg::T2, Reg::T2, reg(Reg::T3)),
-            Ir::alu_imm(AluOp::And, Reg::T3, value, mask),
-            mul64(Reg::T3, Reg::T3, reg(Reg::T4)),
-            Ir::alu(AluOp::Or, Reg::T2, Reg::T2, reg(Reg::T3)),
-            store(Reg::T1, Reg::T2, 0),
-        ])?;
-        // High word: the bytes that cross, i.e. `value >> (64 - s)`, computed
-        // as `(value >> (63 - s)) >> 1` so that s = 0 contributes nothing.
-        self.emit_all([
-            load(Reg::T2, Reg::T1, 8),
-            Ir::alu_imm(AluOp::Xor, Reg::T4, Reg::T0, 63),
-            Ir::alu_imm(AluOp::ShiftRightBitmask, Reg::T4, Reg::T4, 0),
-            Ir::const_(Reg::T3, mask),
-            Ir::alu(AluOp::Srl, Reg::T3, Reg::T3, reg(Reg::T4)),
-            Ir::alu_imm(AluOp::Srl, Reg::T3, Reg::T3, bm1),
-            Ir::alu(AluOp::Andn, Reg::T2, Reg::T2, reg(Reg::T3)),
-            Ir::alu_imm(AluOp::And, Reg::T3, value, mask),
-            Ir::alu(AluOp::Srl, Reg::T3, Reg::T3, reg(Reg::T4)),
-            Ir::alu_imm(AluOp::Srl, Reg::T3, Reg::T3, bm1),
-            Ir::alu(AluOp::Or, Reg::T2, Reg::T2, reg(Reg::T3)),
-            store(Reg::T1, Reg::T2, 8),
-        ])
+        // Hot: the lane is inside one wasm word — a whole word is a plain
+        // cell store (an `i64` narrowed first), an `i64` is two cells, a
+        // sub-word clears its lane and inserts `value << s`.
+        match width {
+            MemWidth::B4 if !wide => {
+                let _ = self.emit(store(Reg::T1, value, 0))?;
+            }
+            MemWidth::B4 => self.emit_all([
+                Ir::alu_imm(AluOp::And, Reg::T3, value, mask),
+                store(Reg::T1, Reg::T3, 0),
+            ])?,
+            MemWidth::B8 => self.emit_all([
+                Ir::alu_imm(AluOp::And, Reg::T3, value, WASM_WORD_MASK),
+                store(Reg::T1, Reg::T3, 0),
+                Ir::alu_imm(AluOp::Srl, Reg::T3, value, shift_right_bitmask(32)),
+                store(Reg::T1, Reg::T3, LINEAR_CELL_BYTES as i64),
+            ])?,
+            MemWidth::B1 | MemWidth::B2 => self.emit_all([
+                mul64(Reg::T2, Reg::T2, imm(SHIFT_PER_LANE)),
+                load(Reg::T3, Reg::T1, 0),
+                Ir::alu_imm(AluOp::Pow2, Reg::T4, Reg::T2, 0),
+                Ir::const_(Reg::T0, mask),
+                mul64(Reg::T0, Reg::T0, reg(Reg::T4)),
+                Ir::alu(AluOp::Andn, Reg::T3, Reg::T3, reg(Reg::T0)),
+                Ir::alu_imm(AluOp::And, Reg::T0, value, mask),
+                mul64(Reg::T0, Reg::T0, reg(Reg::T4)),
+                Ir::alu(AluOp::Or, Reg::T3, Reg::T3, reg(Reg::T0)),
+                store(Reg::T1, Reg::T3, 0),
+            ])?,
+        }
+        // Cold: the lane crosses into the next wasm word(s). With `s =
+        // 8·(a & 3)`: cell 0 keeps its bytes below `s` and takes `value << s`
+        // (truncated to the cell); cell 1 takes `value >> (32 − s)`; for an
+        // `i64`, cell 2 takes `value >> (64 − s) = (value >> (32 − s)) >> 32`.
+        // `T0` = `s`, then the `32 − s` shift bitmask.
+        if let Some(crossing) = crossing {
+            let bm32 = shift_right_bitmask(32);
+            let mut cold = vec![
+                mul64(Reg::T2, Reg::T2, imm(SHIFT_PER_LANE)),
+                load(Reg::T3, Reg::T1, 0),
+                Ir::alu_imm(AluOp::Pow2, Reg::T4, Reg::T2, 0),
+                Ir::const_(Reg::T0, mask),
+                mul64(Reg::T0, Reg::T0, reg(Reg::T4)),
+                Ir::alu_imm(AluOp::And, Reg::T0, Reg::T0, WASM_WORD_MASK),
+                Ir::alu(AluOp::Andn, Reg::T3, Reg::T3, reg(Reg::T0)),
+                Ir::alu_imm(AluOp::And, Reg::T0, value, mask),
+                mul64(Reg::T0, Reg::T0, reg(Reg::T4)),
+                Ir::alu_imm(AluOp::And, Reg::T0, Reg::T0, WASM_WORD_MASK),
+                Ir::alu(AluOp::Or, Reg::T3, Reg::T3, reg(Reg::T0)),
+                store(Reg::T1, Reg::T3, 0),
+                Ir::const_(Reg::T0, 32),
+                Ir::alu(AluOp::Sub(Width::W64), Reg::T0, Reg::T0, reg(Reg::T2)),
+                Ir::alu_imm(AluOp::ShiftRightBitmask, Reg::T0, Reg::T0, 0),
+                load(Reg::T3, Reg::T1, LINEAR_CELL_BYTES as i64),
+                Ir::const_(Reg::T4, mask),
+                Ir::alu(AluOp::Srl, Reg::T4, Reg::T4, reg(Reg::T0)),
+                Ir::alu_imm(AluOp::And, Reg::T4, Reg::T4, WASM_WORD_MASK),
+                Ir::alu(AluOp::Andn, Reg::T3, Reg::T3, reg(Reg::T4)),
+                Ir::alu_imm(AluOp::And, Reg::T4, value, mask),
+                Ir::alu(AluOp::Srl, Reg::T4, Reg::T4, reg(Reg::T0)),
+                Ir::alu_imm(AluOp::And, Reg::T4, Reg::T4, WASM_WORD_MASK),
+                Ir::alu(AluOp::Or, Reg::T3, Reg::T3, reg(Reg::T4)),
+                store(Reg::T1, Reg::T3, LINEAR_CELL_BYTES as i64),
+            ];
+            if width == MemWidth::B8 {
+                cold.extend([
+                    load(Reg::T3, Reg::T1, 2 * LINEAR_CELL_BYTES as i64),
+                    Ir::const_(Reg::T4, u64::MAX),
+                    Ir::alu(AluOp::Srl, Reg::T4, Reg::T4, reg(Reg::T0)),
+                    Ir::alu_imm(AluOp::Srl, Reg::T4, Reg::T4, bm32),
+                    Ir::alu(AluOp::Andn, Reg::T3, Reg::T3, reg(Reg::T4)),
+                    Ir::alu(AluOp::Srl, Reg::T4, value, reg(Reg::T0)),
+                    Ir::alu_imm(AluOp::Srl, Reg::T4, Reg::T4, bm32),
+                    Ir::alu(AluOp::Or, Reg::T3, Reg::T3, reg(Reg::T4)),
+                    store(Reg::T1, Reg::T3, 2 * LINEAR_CELL_BYTES as i64),
+                ]);
+            }
+            self.cold(crossing, cold)?;
+        }
+        Ok(())
     }
 
     /// `rd = op(a, b)` for a source binary operator: one catalog row or its
@@ -652,23 +1109,42 @@ impl Emitter<'_> {
         op: BinaryOp,
         rd: Reg,
         a: Reg,
-        b: Reg,
+        b: Operand,
     ) -> Result<(), LowerError> {
         use AluOp as A;
         let alu = |op, rd, rs1, rs2| Ir::alu(op, rd, rs1, reg(rs2));
+        let direct = |op| Ir::alu(op, rd, a, b);
+        let b = match (op, b) {
+            (BinaryOp::Add, _) => return self.emit_all([direct(A::Add(width))]),
+            (BinaryOp::Sub, _) => return self.emit_all([direct(A::Sub(width))]),
+            (BinaryOp::Mul, _) => return self.emit_all([direct(A::Mul(width))]),
+            (BinaryOp::And, _) => return self.emit_all([direct(A::And)]),
+            (BinaryOp::Or, _) => return self.emit_all([direct(A::Or)]),
+            (BinaryOp::Xor, _) => return self.emit_all([direct(A::Xor)]),
+            (BinaryOp::Eq, _) => return self.emit_all([direct(A::Eq)]),
+            (BinaryOp::Ne, _) => return self.emit_all([direct(A::Ne)]),
+            (BinaryOp::LtU, _) => return self.emit_all([direct(A::LtU)]),
+            (BinaryOp::LeU, _) => return self.emit_all([direct(A::LeU)]),
+            (BinaryOp::GeU, _) => return self.emit_all([direct(A::GeU)]),
+            (_, Operand::Reg(b)) => b,
+            (_, Operand::Imm(imm)) => {
+                let _ = self.emit(Ir::const_(Reg::T0, imm))?;
+                Reg::T0
+            }
+        };
         match op {
-            BinaryOp::Add => self.emit_all([alu(A::Add(width), rd, a, b)]),
-            BinaryOp::Sub => self.emit_all([alu(A::Sub(width), rd, a, b)]),
-            BinaryOp::Mul => self.emit_all([alu(A::Mul(width), rd, a, b)]),
-            BinaryOp::And => self.emit_all([alu(A::And, rd, a, b)]),
-            BinaryOp::Or => self.emit_all([alu(A::Or, rd, a, b)]),
-            BinaryOp::Xor => self.emit_all([alu(A::Xor, rd, a, b)]),
-            BinaryOp::Eq => self.emit_all([alu(A::Eq, rd, a, b)]),
-            BinaryOp::Ne => self.emit_all([alu(A::Ne, rd, a, b)]),
-            BinaryOp::LtU => self.emit_all([alu(A::LtU, rd, a, b)]),
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::And
+            | BinaryOp::Or
+            | BinaryOp::Xor
+            | BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::LtU
+            | BinaryOp::LeU
+            | BinaryOp::GeU => unreachable!("handled above"),
             BinaryOp::GtU => self.emit_all([alu(A::LtU, rd, b, a)]),
-            BinaryOp::LeU => self.emit_all([alu(A::LeU, rd, a, b)]),
-            BinaryOp::GeU => self.emit_all([alu(A::GeU, rd, a, b)]),
             BinaryOp::LtS | BinaryOp::GtS | BinaryOp::LeS | BinaryOp::GeS => {
                 let (table, swap) = match op {
                     BinaryOp::LtS => (A::LtS, false),
@@ -874,31 +1350,55 @@ impl Emitter<'_> {
         }
     }
 
-    fn lower_op(&mut self, ctx: &mut FunctionCtx, op: &WasmOp, h: u32) -> Result<(), LowerError> {
-        let malformed = || LowerError::MalformedControl(ctx.index);
+    /// Lower one operator at stack height `h`. Returns whether `next` (the
+    /// following operator) was absorbed as the destination of this one.
+    fn lower_op(
+        &mut self,
+        ctx: &mut FunctionCtx,
+        op: &WasmOp,
+        h: u32,
+        next: Option<&WasmOp>,
+    ) -> Result<bool, LowerError> {
+        let function = ctx.index;
+        let malformed = move || LowerError::MalformedControl(function);
+        let mut absorbed = false;
         match *op {
-            WasmOp::Nop | WasmOp::Drop => {}
+            WasmOp::Nop => {}
+            WasmOp::Drop => {
+                let _ = ctx.take_pending(h - 1);
+            }
             WasmOp::Unreachable => {
                 let _ = self.emit(Ir::Trap)?;
             }
-            WasmOp::Const(_, value) => {
-                let rd = ctx.stack(h)?;
-                let _ = self.emit(Ir::const_(rd, value))?;
-            }
-            WasmOp::LocalGet(i) => {
-                let (rd, rs) = (ctx.stack(h)?, ctx.slot(i)?);
-                let _ = self.emit(Ir::mov(rd, rs))?;
-            }
+            WasmOp::Const(_, value) => ctx.set_pending(h, Pending::Const(value)),
+            WasmOp::LocalGet(i) => ctx.set_pending(h, Pending::Local(i)),
             WasmOp::LocalSet(i) | WasmOp::LocalTee(i) => {
-                let (rd, rs) = (ctx.slot(i)?, ctx.stack(h - 1)?);
-                let _ = self.emit(Ir::mov(rd, rs))?;
+                let value = ctx.take_pending(h - 1);
+                self.materialize_local(ctx, i)?;
+                let rd = ctx.slot(i)?;
+                match value {
+                    Some(Pending::Local(local)) if local == i => {}
+                    Some(Pending::Local(local)) => {
+                        let _ = self.emit(Ir::mov(rd, ctx.slot(local)?))?;
+                    }
+                    Some(Pending::Const(imm)) => {
+                        let _ = self.emit(Ir::const_(rd, imm))?;
+                    }
+                    None => {
+                        let _ = self.emit(Ir::mov(rd, ctx.stack(h - 1)?))?;
+                    }
+                }
+                if matches!(*op, WasmOp::LocalTee(_)) {
+                    ctx.set_pending(h - 1, Pending::Local(i));
+                }
             }
             WasmOp::GlobalGet(g) => {
-                let rd = ctx.stack(h)?;
+                let (rd, skip) = self.dest(ctx, h, next)?;
+                absorbed = skip;
                 let _ = self.emit(load(rd, Reg::ZERO, global_address(g)))?;
             }
             WasmOp::GlobalSet(g) => {
-                let value = ctx.stack(h - 1)?;
+                let value = self.src(ctx, h - 1)?;
                 let _ = self.emit(store(Reg::ZERO, value, global_address(g)))?;
             }
             WasmOp::Load {
@@ -907,54 +1407,82 @@ impl Emitter<'_> {
                 signed,
                 offset,
             } => {
-                let rd = ctx.stack(h - 1)?;
-                self.emit_load(rd, offset, width, signed, ty.width())?;
+                let addr = self.src(ctx, h - 1)?;
+                let (rd, skip) = self.dest(ctx, h - 1, next)?;
+                absorbed = skip;
+                self.emit_load(rd, addr, offset, width, signed, ty.width())?;
             }
-            WasmOp::Store { width, offset } => {
-                let (base, value) = (ctx.stack(h - 2)?, ctx.stack(h - 1)?);
-                self.emit_store(base, value, offset, width)?;
+            WasmOp::Store { ty, width, offset } => {
+                let (base, value) = (self.src(ctx, h - 2)?, self.src(ctx, h - 1)?);
+                self.emit_store(base, value, ty == ValType::I64, offset, width)?;
             }
             WasmOp::MemorySize => {
-                let rd = ctx.stack(h)?;
+                let (rd, skip) = self.dest(ctx, h, next)?;
+                absorbed = skip;
                 self.emit_all([
                     load(Reg::T0, Reg::ZERO, MEMORY_SIZE_ADDR as i64),
                     Ir::alu_imm(AluOp::Srl, rd, Reg::T0, shift_right_bitmask(16)),
                 ])?;
             }
             WasmOp::MemoryGrow => {
-                let rd = ctx.stack(h - 1)?;
-                self.emit_memory_grow(rd, rd)?;
+                let rs = self.src(ctx, h - 1)?;
+                let (rd, skip) = self.dest(ctx, h - 1, next)?;
+                absorbed = skip;
+                self.emit_memory_grow(rd, rs)?;
             }
             WasmOp::Unary(width, op) => {
-                let rd = ctx.stack(h - 1)?;
-                self.emit_unary(width, op, rd, rd)?;
+                let a = self.src(ctx, h - 1)?;
+                let (rd, skip) = self.dest(ctx, h - 1, next)?;
+                absorbed = skip;
+                self.emit_unary(width, op, rd, a)?;
             }
             WasmOp::Binary(width, op) => {
-                let (rs1, rs2) = (ctx.stack(h - 2)?, ctx.stack(h - 1)?);
-                self.emit_binary(width, op, rs1, rs1, rs2)?;
+                let rs1 = self.src(ctx, h - 2)?;
+                let rs2 = if binary_takes_immediate(op) {
+                    Self::src_operand(ctx, h - 1)?
+                } else {
+                    Operand::Reg(self.src(ctx, h - 1)?)
+                };
+                let (rd, skip) = self.dest(ctx, h - 2, next)?;
+                absorbed = skip;
+                self.emit_binary(width, op, rd, rs1, rs2)?;
             }
             WasmOp::Convert(op) => {
-                let rd = ctx.stack(h - 1)?;
+                let a = self.src(ctx, h - 1)?;
+                let (rd, skip) = self.dest(ctx, h - 1, next)?;
+                absorbed = skip;
                 let _ = self.emit(match op {
-                    ConvertOp::WrapI64 => Ir::alu_imm(AluOp::And, rd, rd, 0xFFFF_FFFF),
-                    ConvertOp::ExtendI32S => Ir::alu_imm(AluOp::SignExtendWord, rd, rd, 0),
-                    ConvertOp::ExtendI32U => Ir::mov(rd, rd),
+                    ConvertOp::WrapI64 => Ir::alu_imm(AluOp::And, rd, a, 0xFFFF_FFFF),
+                    ConvertOp::ExtendI32S => Ir::alu_imm(AluOp::SignExtendWord, rd, a, 0),
+                    ConvertOp::ExtendI32U => Ir::mov(rd, a),
                 })?;
             }
             WasmOp::Select => {
-                let (rd, v2, cond) = (ctx.stack(h - 3)?, ctx.stack(h - 2)?, ctx.stack(h - 1)?);
+                let (v1, v2, cond) = (
+                    self.src(ctx, h - 3)?,
+                    self.src(ctx, h - 2)?,
+                    self.src(ctx, h - 1)?,
+                );
+                let rd = ctx.stack(h - 3)?;
+                if v1 != rd {
+                    let _ = self.emit(Ir::mov(rd, v1))?;
+                }
                 let skip = self.emit(Ir::branch_if_nonzero(cond, 0))?;
                 let _ = self.emit(Ir::mov(rd, v2))?;
                 let end = self.pc()?;
                 self.patch(skip, end);
             }
-            WasmOp::Block(sig) => ctx.labels.push(Label {
-                kind: LabelKind::Block,
-                base: h - sig.params,
-                sig,
-                fixups: Vec::new(),
-            }),
+            WasmOp::Block(sig) => {
+                self.materialize_all(ctx)?;
+                ctx.labels.push(Label {
+                    kind: LabelKind::Block,
+                    base: h - sig.params,
+                    sig,
+                    fixups: Vec::new(),
+                });
+            }
             WasmOp::Loop(sig) => {
+                self.materialize_all(ctx)?;
                 let entry = self.pc()?;
                 ctx.labels.push(Label {
                     kind: LabelKind::Loop { entry },
@@ -964,7 +1492,8 @@ impl Emitter<'_> {
                 });
             }
             WasmOp::If(sig) => {
-                let cond = ctx.stack(h - 1)?;
+                let cond = self.src(ctx, h - 1)?;
+                self.materialize_all(ctx)?;
                 let skip = self.emit(Ir::branch_if_zero(cond, 0))?;
                 ctx.labels.push(Label {
                     kind: LabelKind::If { skip },
@@ -974,6 +1503,7 @@ impl Emitter<'_> {
                 });
             }
             WasmOp::Else => {
+                self.materialize_all(ctx)?;
                 let label = ctx.labels.last_mut().ok_or_else(malformed)?;
                 let LabelKind::If { skip } = label.kind else {
                     return Err(malformed());
@@ -985,6 +1515,7 @@ impl Emitter<'_> {
                 self.patch(skip, else_pc);
             }
             WasmOp::End => {
+                self.materialize_all(ctx)?;
                 let label = ctx.labels.pop().ok_or_else(malformed)?;
                 if ctx.labels.is_empty() {
                     self.emit_return(ctx, h)?;
@@ -997,9 +1528,13 @@ impl Emitter<'_> {
                     self.patch(pc, end);
                 }
             }
-            WasmOp::Br(depth) => self.branch(ctx, h, depth)?,
+            WasmOp::Br(depth) => {
+                self.materialize_all(ctx)?;
+                self.branch(ctx, h, depth)?;
+            }
             WasmOp::BrIf(depth) => {
-                let cond = ctx.stack(h - 1)?;
+                let cond = self.src(ctx, h - 1)?;
+                self.materialize_all(ctx)?;
                 let h = h - 1;
                 let is_function_label = depth as usize + 1 == ctx.labels.len();
                 if !is_function_label && !Self::needs_moves(ctx, h, depth)? {
@@ -1024,7 +1559,8 @@ impl Emitter<'_> {
                 ref targets,
                 default,
             } => {
-                let index = ctx.stack(h - 1)?;
+                let index = self.src(ctx, h - 1)?;
+                self.materialize_all(ctx)?;
                 let h = h - 1;
                 for (i, depth) in targets.iter().enumerate() {
                     let _ = self.emit(Ir::const_(Reg::T0, i as u64))?;
@@ -1040,11 +1576,42 @@ impl Emitter<'_> {
                 }
                 self.branch(ctx, h, default)?;
             }
-            WasmOp::Return => self.emit_return(ctx, h)?,
-            WasmOp::Call(callee) => self.emit_call(ctx, h, callee)?,
+            WasmOp::Return => {
+                self.materialize_all(ctx)?;
+                self.emit_return(ctx, h)?;
+            }
+            WasmOp::Call(callee) => {
+                self.materialize_all(ctx)?;
+                self.emit_call(ctx, h, Callee::Direct(callee))?;
+            }
+            WasmOp::CallIndirect(type_index) => {
+                self.materialize_all(ctx)?;
+                let index = ctx.stack(h - 1)?;
+                self.emit_call(ctx, h - 1, Callee::Indirect { type_index, index })?;
+            }
         }
-        Ok(())
+        Ok(absorbed)
     }
+}
+
+/// Whether [`Emitter::emit_binary`] can take the right operand as an
+/// immediate: the single-row catalog ops (`Operand::Imm` is a row's
+/// `RightIsImm`); the expansions read `b` as a register.
+fn binary_takes_immediate(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::And
+            | BinaryOp::Or
+            | BinaryOp::Xor
+            | BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::LtU
+            | BinaryOp::LeU
+            | BinaryOp::GeU
+    )
 }
 
 fn global_address(index: u32) -> i64 {

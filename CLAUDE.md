@@ -83,9 +83,9 @@ Arkworks dependencies use a fork: `a16z/arkworks-algebra` branch `dev/twist-shou
 
 ### Row model and guest layout
 
-- 128 registers: `ZERO=0, SP=1, RA=2, T0..T4=3..7`, frame slots from `FRAME_BASE=8` (`MAX_FRAME_SLOTS=120`, `MAX_RESULTS=5`). `i32` values are canonical zero-extended.
+- 128 registers: `ZERO=0, SP=1, RA=2, T0..T4=3..7`, `LIMIT_B/H/W/D=8..11` (linear-memory bounds limits per access width, set by the entry stub and `memory.grow`), frame slots from `FRAME_BASE=12` (`MAX_FRAME_SLOTS=116`, `MAX_RESULTS=5`). `i32` values are canonical zero-extended.
 - `RowFlag` (15 flags, bit order = column order): `LeftIsRs1, RightIsRs2, RightIsImm, AddOperands, SubOperands, MulOperands, WriteLookupToRd, Load, Store, Jump, Branch, Assert, Halt, Trap, Advice`. Branch/jump targets are absolute; `Halt` at pc 0 is the padding row.
-- Guest RAM, contiguous from `RAM_BASE = 0x9000_0000` (dense word index `(addr − RAM_BASE)/8`): system words (memory size, termination), public inputs, public outputs, 1 MiB shadow stack + guard page, globals, linear memory. Public I/O is memory: `PublicIo{entry, inputs, outputs}`; the verifier binds the initial memory (program image + inputs) and the final I/O window.
+- Guest RAM, contiguous from `RAM_BASE = 0x9000_0000` (dense word index `(addr − RAM_BASE)/8`): system words (memory size, termination), public inputs, public outputs, 1 MiB shadow stack + guard page, globals, the function table (two words per `funcref` slot: entry pc, canonical signature id + 1; `call_indirect` asserts the signature word and `JumpReg`s the pc word), linear memory (one 8-byte cell per 4-byte wasm word: `linear_address(a) = LINEAR_MEMORY_BASE + 2a`, cell values < 2^32, so an aligned `i32` access is one plain row). Public I/O is memory: `PublicIo{entry, inputs, outputs}`; the verifier binds the initial memory (program image + inputs) and the final I/O window.
 - WASM R1CS: 32 variables (const + 16 inputs + 15 flags), 22 eq rows + 2 product rows; uni-skip domain 11. Spartan outer/product/shift and the instruction-input, bytecode read-RAF (5 gamma-folded stages), register/RAM, and instruction-lookup sumchecks are the WASM-vocabulary relations in `jolt-claims`.
 
 ### Prover Pipeline

@@ -14,7 +14,8 @@ pub mod row;
 pub use bytecode::{BytecodeColumn, BytecodeRow, PreprocessingError, WasmBytecode, REGISTER_NONE};
 pub use ir::{
     shift_right_bitmask, AdviceHint, AluOp, AssertFailure, DataSegment, Ir, IrFunction, IrProgram,
-    MemoryLimits, Operand, OperandMode, Pc, Reg, MAX_FRAME_SLOTS, MAX_RESULTS, REGISTER_COUNT,
+    MemoryLimits, Operand, OperandMode, Pc, Reg, TableSlot, MAX_FRAME_SLOTS, MAX_RESULTS,
+    REGISTER_COUNT,
 };
 pub use ops::Width;
 pub use row::{Lookup, RowFlag, RowFlags, RowModel, RowSpec};

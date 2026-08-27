@@ -3,11 +3,12 @@
 //! RAM contract).
 
 use jolt_wasm_ir::layout::{
-    GLOBALS_BASE, GLOBALS_SIZE, INPUTS_BASE, INPUTS_SIZE, LINEAR_MEMORY_BASE, MEMORY_SIZE_ADDR,
-    OUTPUTS_BASE, OUTPUTS_SIZE, PAGE_SIZE, SHADOW_STACK_BASE, SHADOW_STACK_SIZE, SYSTEM_BASE,
-    SYSTEM_SIZE, WORD_BYTES,
+    linear_address, table_slot_address, GLOBALS_BASE, GLOBALS_SIZE, INPUTS_BASE, INPUTS_SIZE,
+    LINEAR_CELL_BYTES, LINEAR_MEMORY_BASE, MEMORY_SIZE_ADDR, OUTPUTS_BASE, OUTPUTS_SIZE, PAGE_SIZE,
+    SHADOW_STACK_BASE, SHADOW_STACK_SIZE, SYSTEM_BASE, SYSTEM_SIZE, TABLE_BASE, TABLE_SIZE,
+    WASM_WORD_BYTES, WORD_BYTES,
 };
-use jolt_wasm_ir::MemoryLimits;
+use jolt_wasm_ir::{MemoryLimits, TableSlot};
 
 use crate::error::Trap;
 
@@ -18,19 +19,28 @@ pub struct Memory {
     inputs: Vec<u8>,
     outputs: Vec<u8>,
     globals: Vec<u8>,
-    /// Linear memory plus one zeroed slack word past the end, so a
-    /// non-crossing access to the last bytes can still read its `Hi` word.
+    /// The function table (`layout::TABLE_BASE` encoding).
+    table: Vec<u8>,
+    /// Linear memory as wasm bytes (cell `j` is bytes `4j..4j+4`) plus one
+    /// zeroed slack wasm word past the end.
     linear: Vec<u8>,
     max_pages: u64,
 }
 
 impl Memory {
-    pub fn new(limits: MemoryLimits, globals: &[u64]) -> Self {
+    pub fn new(limits: MemoryLimits, globals: &[u64], table: &[Option<TableSlot>]) -> Self {
         let mut global_bytes = Vec::with_capacity((GLOBALS_SIZE as usize).max(globals.len() * 8));
         for g in globals {
             global_bytes.extend_from_slice(&g.to_le_bytes());
         }
         global_bytes.resize(GLOBALS_SIZE as usize, 0);
+        let mut table_bytes = vec![0; TABLE_SIZE as usize];
+        for (i, slot) in table.iter().enumerate() {
+            for (word, value) in TableSlot::words(*slot).into_iter().enumerate() {
+                let start = (table_slot_address(i as u64) - TABLE_BASE) as usize + 8 * word;
+                table_bytes[start..start + 8].copy_from_slice(&value.to_le_bytes());
+            }
+        }
         let bytes = limits.initial_pages * PAGE_SIZE;
         let mut system = vec![0; SYSTEM_SIZE as usize];
         system[..8].copy_from_slice(&bytes.to_le_bytes());
@@ -40,7 +50,8 @@ impl Memory {
             inputs: vec![0; INPUTS_SIZE as usize],
             outputs: vec![0; OUTPUTS_SIZE as usize],
             globals: global_bytes,
-            linear: vec![0; (bytes + WORD_BYTES) as usize],
+            table: table_bytes,
+            linear: vec![0; (bytes + WASM_WORD_BYTES) as usize],
             max_pages: limits.max_pages,
         }
     }
@@ -61,23 +72,12 @@ impl Memory {
         self.max_pages
     }
 
-    /// Non-zero linear-memory bytes as `(wasm offset, byte)` — the final
-    /// memory image without the zero padding.
-    pub fn linear_nonzero_bytes(&self) -> impl Iterator<Item = (u64, u8)> + '_ {
-        let size = self.size_bytes() as usize;
-        self.linear[..size]
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| **b != 0)
-            .map(|(i, b)| (i as u64, *b))
-    }
-
     /// Initialize linear memory bytes at a wasm offset (data segments).
     pub fn init_linear(&mut self, offset: u64, bytes: &[u8]) -> Result<(), Trap> {
         let end = offset.checked_add(bytes.len() as u64);
         if end.is_none_or(|end| end > self.size_bytes()) {
             return Err(Trap::OutOfBoundsMemory {
-                address: LINEAR_MEMORY_BASE.wrapping_add(offset),
+                address: linear_address(offset),
                 width: bytes.len().min(255) as u8,
             });
         }
@@ -87,14 +87,21 @@ impl Memory {
     }
 
     pub fn read_word(&self, address: u64) -> Result<u64, Trap> {
-        let (region, start) = self.locate(address)?;
+        let (region, start) = match self.locate(address)? {
+            Slot::Cell(start) => {
+                let mut word = [0u8; 4];
+                word.copy_from_slice(&self.linear[start..start + 4]);
+                return Ok(u64::from(u32::from_le_bytes(word)));
+            }
+            Slot::Word(region, start) => (region, start),
+        };
         let buf = match region {
             Region::Shadow => &self.shadow,
             Region::System => &self.system,
             Region::Inputs => &self.inputs,
             Region::Outputs => &self.outputs,
             Region::Globals => &self.globals,
-            Region::Linear => &self.linear,
+            Region::Table => &self.table,
         };
         let mut word = [0u8; 8];
         word.copy_from_slice(&buf[start..start + 8]);
@@ -105,14 +112,25 @@ impl Memory {
     /// word (the lowered `memory.grow`) resizes the linear backing store; the
     /// lowering only writes sizes within the page cap.
     pub fn write_word(&mut self, address: u64, value: u64) -> Result<u64, Trap> {
-        let (region, start) = self.locate(address)?;
+        let (region, start) = match self.locate(address)? {
+            Slot::Cell(start) => {
+                let word =
+                    u32::try_from(value).map_err(|_| Trap::CellOverflow { address, value })?;
+                let slice = &mut self.linear[start..start + 4];
+                let mut previous = [0u8; 4];
+                previous.copy_from_slice(slice);
+                slice.copy_from_slice(&word.to_le_bytes());
+                return Ok(u64::from(u32::from_le_bytes(previous)));
+            }
+            Slot::Word(region, start) => (region, start),
+        };
         let buf = match region {
             Region::Shadow => &mut self.shadow,
             Region::System => &mut self.system,
             Region::Inputs => &mut self.inputs,
             Region::Outputs => &mut self.outputs,
             Region::Globals => &mut self.globals,
-            Region::Linear => &mut self.linear,
+            Region::Table => &mut self.table,
         };
         let slice = &mut buf[start..start + 8];
         let mut word = [0u8; 8];
@@ -120,18 +138,30 @@ impl Memory {
         slice.copy_from_slice(&value.to_le_bytes());
         if address == MEMORY_SIZE_ADDR {
             let capped = value.min(self.max_pages * PAGE_SIZE);
-            self.linear.resize((capped + WORD_BYTES) as usize, 0);
+            self.linear.resize((capped + WASM_WORD_BYTES) as usize, 0);
         }
         Ok(u64::from_le_bytes(word))
     }
 
-    fn locate(&self, address: u64) -> Result<(Region, usize), Trap> {
+    fn locate(&self, address: u64) -> Result<Slot, Trap> {
         if !address.is_multiple_of(WORD_BYTES) {
             return Err(Trap::UnalignedWord(address));
         }
         let oob = || Trap::OutOfBoundsMemory { address, width: 8 };
-        let (region, base, size) = if address >= LINEAR_MEMORY_BASE {
-            (Region::Linear, LINEAR_MEMORY_BASE, self.linear.len())
+        if address >= LINEAR_MEMORY_BASE {
+            // Cell `j` holds wasm bytes `4j..4j+4`.
+            let cell = (address - LINEAR_MEMORY_BASE) / LINEAR_CELL_BYTES;
+            let start = (cell * WASM_WORD_BYTES) as usize;
+            if start
+                .checked_add(4)
+                .is_none_or(|end| end > self.linear.len())
+            {
+                return Err(oob());
+            }
+            return Ok(Slot::Cell(start));
+        }
+        let (region, base, size) = if address >= TABLE_BASE {
+            (Region::Table, TABLE_BASE, self.table.len())
         } else if address >= GLOBALS_BASE {
             (Region::Globals, GLOBALS_BASE, self.globals.len())
         } else if address >= SHADOW_STACK_BASE + SHADOW_STACK_SIZE {
@@ -155,8 +185,16 @@ impl Memory {
                 oob()
             });
         }
-        Ok((region, start))
+        Ok(Slot::Word(region, start))
     }
+}
+
+/// A located word: a linear-memory cell (byte offset into the wasm bytes)
+/// or a full 64-bit word of another region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Cell(usize),
+    Word(Region, usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,5 +204,5 @@ enum Region {
     Inputs,
     Outputs,
     Globals,
-    Linear,
+    Table,
 }

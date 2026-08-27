@@ -8,8 +8,7 @@
 use jolt_wasm_backend::{Lookup, Machine, RowFlag, RowModel};
 use jolt_wasm_frontend::WasmModule;
 use jolt_wasm_ir::layout::{
-    input_address, output_address, GLOBALS_BASE, LINEAR_MEMORY_BASE, MEMORY_SIZE_ADDR,
-    TERMINATION_ADDR,
+    input_address, linear_address, output_address, GLOBALS_BASE, MEMORY_SIZE_ADDR, TERMINATION_ADDR,
 };
 use jolt_wasm_ir::{Ir, IrProgram};
 use jolt_wasm_program::{
@@ -125,9 +124,15 @@ fn public_images_bracket_the_execution() {
                 address: GLOBALS_BASE,
                 value: 0x1122_3344_5566_7788
             },
+            // Bytes 3..8 of the segment: `aa` in the first wasm word's cell,
+            // `bb cc dd ee` in the second's.
             MemoryWord {
-                address: LINEAR_MEMORY_BASE,
-                value: 0xEEDD_CCBB_AA00_0000
+                address: linear_address(0),
+                value: 0xAA00_0000
+            },
+            MemoryWord {
+                address: linear_address(4),
+                value: 0xEEDD_CCBB
             },
         ]
     );

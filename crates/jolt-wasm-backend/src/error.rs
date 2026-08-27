@@ -31,10 +31,18 @@ pub enum Trap {
     OutOfBoundsMemory { address: u64, width: u8 },
     #[error("call stack exhausted")]
     CallStackExhausted,
+    #[error("undefined element: call_indirect index past the table")]
+    TableOutOfBounds,
+    #[error("indirect call type mismatch (or null table slot)")]
+    IndirectCallTypeMismatch,
     /// A word access at a non-8-byte-aligned address: a lowering invariant
     /// violation, not a guest fault.
     #[error("unaligned word access at {0:#x}")]
     UnalignedWord(u64),
+    /// A linear-memory cell written with a value that is not a 32-bit wasm
+    /// word: a lowering invariant violation, not a guest fault.
+    #[error("linear-memory cell at {address:#x} written with {value:#x} (not a 32-bit word)")]
+    CellOverflow { address: u64, value: u64 },
     #[error("jump to pc {0} outside the program")]
     InvalidJump(u64),
 }

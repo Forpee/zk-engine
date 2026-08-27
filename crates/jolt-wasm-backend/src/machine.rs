@@ -83,7 +83,7 @@ pub struct Machine<'a> {
 
 impl<'a> Machine<'a> {
     pub fn new(program: &'a IrProgram) -> Result<Self, ExecutionError> {
-        let mut memory = Memory::new(program.memory, &program.globals);
+        let mut memory = Memory::new(program.memory, &program.globals, &program.table);
         for segment in &program.data {
             memory
                 .init_linear(segment.offset, &segment.bytes)
@@ -289,6 +289,8 @@ fn assert_trap(instruction: Ir, rs1_value: u64) -> Trap {
             },
             AssertFailure::DivideByZero => Trap::DivideByZero,
             AssertFailure::IntegerOverflow => Trap::IntegerOverflow,
+            AssertFailure::TableOutOfBounds => Trap::TableOutOfBounds,
+            AssertFailure::IndirectCallTypeMismatch => Trap::IndirectCallTypeMismatch,
         },
         _ => Trap::Unreachable,
     }

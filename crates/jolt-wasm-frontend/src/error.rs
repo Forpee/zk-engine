@@ -27,6 +27,12 @@ pub enum DecodeError {
     GlobalIndex(u32),
     #[error("data segment {index} ({len} bytes at {offset}) exceeds the initial memory")]
     DataOutOfBounds { index: u32, offset: u64, len: usize },
+    #[error("element segment {0} is passive or declarative; only active segments are supported")]
+    PassiveElement(u32),
+    #[error("element segment {index} targets table {table}; only table 0 exists")]
+    ElementTableIndex { index: u32, table: u32 },
+    #[error("element segment {index} ({len} slots at {offset}) exceeds the table")]
+    ElementOutOfBounds { index: u32, offset: u64, len: usize },
 }
 
 /// Errors raised while lowering a decoded module to the register-machine IR.
@@ -55,4 +61,6 @@ pub enum LowerError {
     MalformedControl(u32),
     #[error("linear memory declares {pages} initial pages; at most {max} are supported")]
     MemoryTooLarge { pages: u64, max: u64 },
+    #[error("the function table has {slots} slots; at most {max} are supported")]
+    TableTooLarge { slots: u64, max: u64 },
 }

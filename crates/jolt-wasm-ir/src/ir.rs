@@ -31,7 +31,7 @@ pub const REGISTER_COUNT: usize = 128;
 pub const MAX_FRAME_SLOTS: usize = REGISTER_COUNT - Reg::FRAME_BASE as usize;
 
 /// Maximum results a function may return: one temporary each.
-pub const MAX_RESULTS: usize = (Reg::FRAME_BASE - Reg::T0.0) as usize;
+pub const MAX_RESULTS: usize = (Reg::T4.0 - Reg::T0.0 + 1) as usize;
 
 /// A virtual register id, always `< REGISTER_COUNT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -50,8 +50,27 @@ impl Reg {
     pub const T2: Reg = Reg(5);
     pub const T3: Reg = Reg(6);
     pub const T4: Reg = Reg(7);
+    /// Linear-memory bounds limits, one per access width `w` (1, 2, 4, 8
+    /// bytes): the guest address `LINEAR_MEMORY_BASE + 2·size − 2·w + 1`,
+    /// so an access at effective guest address `t` is in bounds iff
+    /// `t < limit(w)`. Set by the entry stub and by `memory.grow`.
+    pub const LIMIT_B: Reg = Reg(8);
+    pub const LIMIT_H: Reg = Reg(9);
+    pub const LIMIT_W: Reg = Reg(10);
+    pub const LIMIT_D: Reg = Reg(11);
     /// First register of the per-function frame.
-    pub const FRAME_BASE: u8 = 8;
+    pub const FRAME_BASE: u8 = 12;
+
+    /// The bounds-limit register for a `bytes`-wide access.
+    pub const fn limit(bytes: u8) -> Option<Reg> {
+        match bytes {
+            1 => Some(Reg::LIMIT_B),
+            2 => Some(Reg::LIMIT_H),
+            4 => Some(Reg::LIMIT_W),
+            8 => Some(Reg::LIMIT_D),
+            _ => None,
+        }
+    }
 
     /// Register holding frame slot `slot` (local index, or locals + stack depth).
     pub fn frame_slot(slot: usize) -> Option<Reg> {
@@ -263,6 +282,10 @@ pub enum AssertFailure {
     OutOfBounds(u8),
     DivideByZero,
     IntegerOverflow,
+    /// `call_indirect` index past the table.
+    TableOutOfBounds,
+    /// `call_indirect` on a null slot or a callee of another signature.
+    IndirectCallTypeMismatch,
 }
 
 /// What an [`Ir::Advice`] row computes (the honest prover's witness).
@@ -410,6 +433,26 @@ pub struct IrFunction {
     pub frame_slots: usize,
 }
 
+/// One occupied function-table slot: the callee and its canonical signature
+/// (structurally equal function types share one id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TableSlot {
+    pub entry: Pc,
+    pub signature: u32,
+}
+
+impl TableSlot {
+    /// The two guest words of a slot: the entry pc and `signature + 1`, both
+    /// zero for a null slot. The one owner of the table encoding
+    /// (`layout::TABLE_BASE`).
+    pub fn words(slot: Option<TableSlot>) -> [u64; 2] {
+        match slot {
+            Some(slot) => [u64::from(slot.entry), u64::from(slot.signature) + 1],
+            None => [0, 0],
+        }
+    }
+}
+
 /// Linear-memory limits in 64 KiB pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
@@ -445,6 +488,9 @@ pub struct IrProgram {
     /// Initial global values (zero-extended to 64 bits).
     pub globals: Vec<u64>,
     pub data: Vec<DataSegment>,
+    /// The `funcref` table after element initialization, `None` for a null
+    /// slot; laid out in guest RAM at `layout::TABLE_BASE`.
+    pub table: Vec<Option<TableSlot>>,
 }
 
 impl IrProgram {

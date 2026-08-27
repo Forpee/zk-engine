@@ -4,7 +4,8 @@
 //!
 //! All regions sit at or above `0x8000_0000`, the RAM window of Jolt's memory
 //! argument, in this order: system words, public inputs, public outputs, the
-//! shadow call stack (plus its guard page), globals, linear memory. Public
+//! shadow call stack (plus its guard page), globals, the function table,
+//! linear memory (one 8-byte cell per 4-byte wasm word). Public
 //! I/O lives in memory: the host writes the entry's arguments to
 //! [`INPUTS_BASE`] before execution and reads its results from
 //! [`OUTPUTS_BASE`] and the termination word after — the initial and final
@@ -47,8 +48,28 @@ pub const SHADOW_GUARD_SIZE: u64 = 0x1000;
 pub const GLOBALS_BASE: u64 = SHADOW_STACK_BASE + SHADOW_STACK_SIZE + SHADOW_GUARD_SIZE;
 pub const GLOBALS_SIZE: u64 = 0x1_0000;
 
-/// Linear memory: wasm address `a` maps to guest address `LINEAR_MEMORY_BASE + a`.
-pub const LINEAR_MEMORY_BASE: u64 = GLOBALS_BASE + GLOBALS_SIZE;
+/// Function table region: slot `i` of the module's `funcref` table is two
+/// words at [`table_slot_address`]`(i)` — the callee's entry pc, then its
+/// canonical signature id plus one (`0` for a null reference). Both are
+/// program-image words; `call_indirect` loads them and asserts the
+/// signature word before jumping to the pc word.
+pub const TABLE_BASE: u64 = GLOBALS_BASE + GLOBALS_SIZE;
+pub const TABLE_SIZE: u64 = 0x1_0000;
+pub const TABLE_SLOT_BYTES: u64 = 2 * WORD_BYTES;
+/// Capacity of the function table region in slots.
+pub const MAX_TABLE_SLOTS: u64 = TABLE_SIZE / TABLE_SLOT_BYTES;
+
+/// Linear memory: one RAM word (cell) per 4-byte wasm word, holding it
+/// zero-extended, so wasm address `a` maps to guest address
+/// [`linear_address`]`(a) = LINEAR_MEMORY_BASE + 2·a` and the cell of the
+/// wasm word containing `a` is `linear_address(a) & !7`. An aligned `i32`
+/// access is then one cell read/write with no shifting; the lowering keeps
+/// every cell value below `2^32` (`jolt-wasm-backend`'s `Memory` rejects
+/// larger writes as an invariant violation).
+pub const LINEAR_MEMORY_BASE: u64 = TABLE_BASE + TABLE_SIZE;
+/// Bytes of one linear-memory cell, and the wasm bytes it holds.
+pub const LINEAR_CELL_BYTES: u64 = WORD_BYTES;
+pub const WASM_WORD_BYTES: u64 = 4;
 
 /// Default page cap when a module declares no maximum (256 pages = 16 MiB).
 pub const DEFAULT_MAX_PAGES: u64 = 256;
@@ -59,6 +80,16 @@ pub const MAX_PAGES: u64 = 65_536;
 /// Address of public input word `i`.
 pub const fn input_address(i: u64) -> u64 {
     INPUTS_BASE + WORD_BYTES * i
+}
+
+/// Guest address of wasm linear-memory byte `a` (see [`LINEAR_MEMORY_BASE`]).
+pub const fn linear_address(a: u64) -> u64 {
+    LINEAR_MEMORY_BASE + (LINEAR_CELL_BYTES / WASM_WORD_BYTES) * a
+}
+
+/// Address of the first word (the entry pc) of function-table slot `i`.
+pub const fn table_slot_address(i: u64) -> u64 {
+    TABLE_BASE + TABLE_SLOT_BYTES * i
 }
 
 /// Address of public output word `i`.
@@ -82,7 +113,7 @@ pub const fn unmap_word_address(index: u64) -> u64 {
 }
 
 /// One past the last guest address a program with `max_pages` linear-memory
-/// pages can touch (its slack word included).
+/// pages can touch (its slack cell included).
 pub const fn ram_end(max_pages: u64) -> u64 {
-    LINEAR_MEMORY_BASE + max_pages * PAGE_SIZE + WORD_BYTES
+    linear_address(max_pages * PAGE_SIZE) + LINEAR_CELL_BYTES
 }

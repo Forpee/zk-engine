@@ -51,6 +51,7 @@ pub fn sample_program() -> IrProgram {
         },
         globals: Vec::new(),
         data: Vec::new(),
+        table: Vec::new(),
     }
     .validate()
     .unwrap()

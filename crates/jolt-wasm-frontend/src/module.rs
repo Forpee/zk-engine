@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use wasmparser::{
-    BlockType, CompositeInnerType, ConstExpr, DataKind, ExternalKind, FuncValidatorAllocations,
-    Operator, Parser, Payload, ValidPayload, Validator,
+    BlockType, CompositeInnerType, ConstExpr, DataKind, ElementItems, ElementKind, ExternalKind,
+    FuncValidatorAllocations, Operator, Parser, Payload, ValidPayload, Validator,
 };
 
 use crate::error::DecodeError;
@@ -53,6 +53,21 @@ pub struct MemoryDecl {
     pub max_pages: Option<u64>,
 }
 
+/// The module's single `funcref` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableDecl {
+    pub initial: u64,
+    pub maximum: Option<u64>,
+}
+
+/// An active element segment: function indices (`None` for `ref.null`)
+/// written to table 0 from `offset`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElementSegment {
+    pub offset: u64,
+    pub functions: Vec<Option<u32>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WasmModule {
     pub types: Vec<FuncType>,
@@ -60,6 +75,8 @@ pub struct WasmModule {
     pub globals: Vec<Global>,
     pub memory: Option<MemoryDecl>,
     pub data: Vec<DataSegment>,
+    pub table: Option<TableDecl>,
+    pub elements: Vec<ElementSegment>,
     /// Exported functions by name.
     pub exports: BTreeMap<String, u32>,
     pub start: Option<u32>,
@@ -135,8 +152,54 @@ impl WasmModule {
                         function_types.push(ty?);
                     }
                 }
-                Payload::TableSection(_) | Payload::ElementSection(_) => {
-                    return Err(DecodeError::Unsupported("tables"));
+                Payload::TableSection(reader) => {
+                    for table in reader {
+                        let table = table?;
+                        if module.table.is_some() {
+                            return Err(DecodeError::Unsupported("multiple tables"));
+                        }
+                        if !table.ty.element_type.is_func_ref() || table.ty.table64 {
+                            return Err(DecodeError::Unsupported("non-funcref or 64-bit tables"));
+                        }
+                        if !matches!(table.init, wasmparser::TableInit::RefNull) {
+                            return Err(DecodeError::Unsupported("table initializer expressions"));
+                        }
+                        module.table = Some(TableDecl {
+                            initial: table.ty.initial,
+                            maximum: table.ty.maximum,
+                        });
+                    }
+                }
+                Payload::ElementSection(reader) => {
+                    for (index, element) in reader.into_iter().enumerate() {
+                        let element = element?;
+                        let index = index as u32;
+                        let ElementKind::Active {
+                            table_index,
+                            offset_expr,
+                        } = element.kind
+                        else {
+                            return Err(DecodeError::PassiveElement(index));
+                        };
+                        let table = table_index.unwrap_or(0);
+                        if table != 0 {
+                            return Err(DecodeError::ElementTableIndex { index, table });
+                        }
+                        let functions = match element.items {
+                            ElementItems::Functions(items) => items
+                                .into_iter()
+                                .map(|f| f.map(Some))
+                                .collect::<Result<Vec<_>, _>>()?,
+                            ElementItems::Expressions(_, items) => items
+                                .into_iter()
+                                .map(|expr| func_ref_expr(&expr?))
+                                .collect::<Result<Vec<_>, _>>()?,
+                        };
+                        module.elements.push(ElementSegment {
+                            offset: const_expr(&offset_expr)?,
+                            functions,
+                        });
+                    }
                 }
                 Payload::TagSection(_) => return Err(DecodeError::Unsupported("exceptions")),
                 Payload::MemorySection(reader) => {
@@ -244,6 +307,17 @@ impl WasmModule {
             }
         }
 
+        for (index, segment) in module.elements.iter().enumerate() {
+            let slots = module.table.map_or(0, |t| t.initial);
+            let end = segment.offset + segment.functions.len() as u64;
+            if end > slots {
+                return Err(DecodeError::ElementOutOfBounds {
+                    index: index as u32,
+                    offset: segment.offset,
+                    len: segment.functions.len(),
+                });
+            }
+        }
         if let Some(memory) = module.memory {
             for (index, segment) in module.data.iter().enumerate() {
                 let end = segment.offset + segment.bytes.len() as u64;
@@ -272,6 +346,20 @@ impl WasmModule {
 
 fn convert_types(types: &[wasmparser::ValType]) -> Result<Vec<ValType>, DecodeError> {
     types.iter().map(|ty| val_type(*ty)).collect()
+}
+
+/// Evaluate an element expression of the form `ref.func f` / `ref.null` `end`.
+fn func_ref_expr(expr: &ConstExpr<'_>) -> Result<Option<u32>, DecodeError> {
+    let mut reader = expr.get_operators_reader();
+    let function = match reader.read()? {
+        Operator::RefFunc { function_index } => Some(function_index),
+        Operator::RefNull { .. } => None,
+        _ => return Err(DecodeError::UnsupportedConstExpr),
+    };
+    match reader.read()? {
+        Operator::End => Ok(function),
+        _ => Err(DecodeError::UnsupportedConstExpr),
+    }
 }
 
 /// Evaluate a constant expression of the form `i32.const`/`i64.const` `end`.

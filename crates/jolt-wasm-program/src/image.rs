@@ -4,11 +4,12 @@
 //! RAM argument's initial state; and the words the final state must hold —
 //! the results in the output words and the termination word.
 
+use jolt_wasm_ir::layout::linear_address;
 use jolt_wasm_ir::layout::{
-    input_address, output_address, GLOBALS_BASE, LINEAR_MEMORY_BASE, MEMORY_SIZE_ADDR, PAGE_SIZE,
-    TERMINATION_ADDR,
+    input_address, output_address, table_slot_address, GLOBALS_BASE, LINEAR_CELL_BYTES,
+    MEMORY_SIZE_ADDR, PAGE_SIZE, TERMINATION_ADDR, WASM_WORD_BYTES,
 };
-use jolt_wasm_ir::IrProgram;
+use jolt_wasm_ir::{IrProgram, TableSlot};
 
 /// One initial memory word at an absolute, 8-byte-aligned guest address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,12 +35,26 @@ pub fn initial_memory_words(program: &IrProgram, inputs: &[u64]) -> Vec<MemoryWo
     };
     for segment in &program.data {
         for (i, byte) in segment.bytes.iter().enumerate() {
-            set_byte(LINEAR_MEMORY_BASE + segment.offset + i as u64, *byte);
+            // Cell of the containing wasm word, then the byte within it.
+            let a = segment.offset + i as u64;
+            let cell = linear_address(a - a % WASM_WORD_BYTES);
+            debug_assert!(cell.is_multiple_of(LINEAR_CELL_BYTES));
+            set_byte(cell + a % WASM_WORD_BYTES, *byte);
         }
     }
     for (i, value) in program.globals.iter().enumerate() {
         for (b, byte) in value.to_le_bytes().into_iter().enumerate() {
             set_byte(GLOBALS_BASE + 8 * i as u64 + b as u64, byte);
+        }
+    }
+    for (i, slot) in program.table.iter().enumerate() {
+        for (word, value) in TableSlot::words(*slot).into_iter().enumerate() {
+            for (b, byte) in value.to_le_bytes().into_iter().enumerate() {
+                set_byte(
+                    table_slot_address(i as u64) + 8 * word as u64 + b as u64,
+                    byte,
+                );
+            }
         }
     }
     let size = program.memory.initial_pages * PAGE_SIZE;

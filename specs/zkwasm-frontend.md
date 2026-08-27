@@ -66,7 +66,9 @@ frontend and backend share only the IR crate:
 - **One address space, inside Jolt's RAM window.** From `RAM_BASE`
   (`0x9000_0000`) upward and contiguous: system words (memory size,
   termination), public inputs, public outputs, the 1 MiB shadow stack plus
-  its guard page, globals (8 bytes each), and linear memory. The RAM
+  its guard page, globals (8 bytes each), the function table (16 bytes per
+  slot: the callee's entry pc and its canonical signature id + 1, `0` for
+  null), and linear memory. The RAM
   argument's word index is the dense `(address − RAM_BASE) / 8`
   (`layout::remap_word_address`); a record's RAM address is always absolute.
   System and I/O words sit at the bottom so a program that touches little
@@ -109,7 +111,29 @@ frontend and backend share only the IR crate:
   moves results to `T0..`, reloads `RA` from `SP - 8`, and `JumpReg`s; the
   caller then restores `SP` and its live slots below the arguments and moves
   the results into place. The callee never touches `SP` net, so `return` is
-  caller-agnostic.
+  caller-agnostic. `call_indirect` runs the same sequence with the table
+  index (an operand-stack slot above the arguments) resolved right before
+  the jump: bounds-`Assert` against the table size, load the slot's
+  signature word and `Assert` it equals the expected canonical signature
+  id + 1 (structural equality of function types; a null slot's `0` never
+  matches), load the entry pc into `RA`, `JumpReg RA`.
+- **Operand forwarding.** `local.get` and `*.const` emit no row: the stack
+  slot is marked pending and the consumer reads the local's register (or
+  takes the constant as its immediate); an operator followed by
+  `local.set`/`tee` writes the local directly. Pending slots are
+  materialized before control flow, calls, `return`, and a write to the
+  aliased local (`crates/jolt-wasm-frontend/src/lower.rs`, `Pending`).
+- **One RAM cell per wasm word.** Linear memory maps wasm address `a` to
+  guest address `LINEAR_MEMORY_BASE + 2a` (`layout::linear_address`); each
+  8-byte cell holds one 4-byte wasm word zero-extended (the backend rejects
+  larger cell writes as a lowering invariant violation). Bounds are one
+  `Assert LtU t < LIMIT_w` against the reserved registers `LIMIT_B/H/W/D`
+  (`linear_address(size) − 2w + 1`, set by the entry stub and refreshed by
+  `memory.grow`). After the assert, `a & 3` decides between the hot path —
+  an aligned `i32` is a plain cell load/store, an aligned `i64` two cells,
+  a byte/halfword one cell shifted by `8·(a & 3)` — and an out-of-line cold
+  block placed after the function body for accesses crossing a wasm word
+  (up to three cells). Aligned accesses never execute cold rows.
 - **Structured control flow lowers to jumps.** `block`/`loop`/`if` become
   forward/backward `Jump`/`BranchIfZero`/`BranchIfNonZero`; a branch that
   carries values `Move`s them down to the target label's base height first.
@@ -209,9 +233,11 @@ frontend and backend share only the IR crate:
 
 ### Non-Goals
 
-- Floats (`f32`/`f64`), SIMD, tables/`call_indirect`, imports/host calls,
-  multi-memory, memory64, bulk memory, exceptions, GC types. Each is a typed
-  `DecodeError` today.
+- Floats (`f32`/`f64`), SIMD, imports/host calls, multi-memory, memory64,
+  bulk memory, exceptions, GC types, and table mutation (`table.get/set/
+  grow`, multiple tables, passive/declarative element segments). Each is a
+  typed `DecodeError` today. One `funcref` table with active element
+  segments and `call_indirect` is supported.
 - Register spilling for frames larger than 120 slots.
 - Proof-side integration: re-pointing `jolt-prover` (Spartan over
   `constraints::wasm`, bytecode read-RAF over `WasmBytecode`,
@@ -235,8 +261,10 @@ frontend and backend share only the IR crate:
       else with a typed error (`unsupported_operators_are_typed_errors`).
 - [x] Recursive calls, loops, `br_table`, `select`, block results carried by
       branches, multi-value calls, globals + `start`, data segments, narrow
-      loads/stores, `memory.grow`/`memory.size` execute to the spec-defined
-      result (`crates/jolt-wasm-backend/tests/execute.rs`).
+      loads/stores, `memory.grow`/`memory.size`, and `call_indirect` (table
+      dispatch; null-slot, signature-mismatch, and out-of-bounds traps)
+      execute to the spec-defined result
+      (`crates/jolt-wasm-backend/tests/execute.rs`).
 - [x] Every record's instruction is the one at its pc, `ZERO` is never
       written, and the pc chains within a segment (`check_records`).
 - [x] Traps: divide-by-zero, signed overflow, OOB, `unreachable`, unbounded

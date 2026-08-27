@@ -145,6 +145,8 @@ pub enum WasmOp {
     },
     Return,
     Call(u32),
+    /// `call_indirect` through table 0 with the callee's expected type index.
+    CallIndirect(u32),
     Drop,
     Select,
     LocalGet(u32),
@@ -160,6 +162,9 @@ pub enum WasmOp {
         offset: u64,
     },
     Store {
+        /// Type of the stored value (an `i64` narrowed to `width` bytes is
+        /// truncated by the lowering).
+        ty: ValType,
         width: MemWidth,
         offset: u64,
     },
@@ -189,8 +194,9 @@ impl WasmOp {
                 offset: memarg.offset,
             })
         };
-        let store = |width, memarg: &MemArg| {
+        let store = |ty, width, memarg: &MemArg| {
             check_memarg(memarg).map(|()| WasmOp::Store {
+                ty,
                 width,
                 offset: memarg.offset,
             })
@@ -211,6 +217,15 @@ impl WasmOp {
             },
             Operator::Return => WasmOp::Return,
             Operator::Call { function_index } => WasmOp::Call(*function_index),
+            Operator::CallIndirect {
+                type_index,
+                table_index,
+            } => {
+                if *table_index != 0 {
+                    return Err(DecodeError::Unsupported("multiple tables"));
+                }
+                WasmOp::CallIndirect(*type_index)
+            }
             Operator::Drop => WasmOp::Drop,
             Operator::Select => WasmOp::Select,
             Operator::LocalGet { local_index } => WasmOp::LocalGet(*local_index),
@@ -231,15 +246,13 @@ impl WasmOp {
             Operator::I64Load16U { memarg } => load(ValType::I64, MemWidth::B2, false, memarg)?,
             Operator::I64Load32S { memarg } => load(ValType::I64, MemWidth::B4, true, memarg)?,
             Operator::I64Load32U { memarg } => load(ValType::I64, MemWidth::B4, false, memarg)?,
-            Operator::I32Store { memarg } => store(MemWidth::B4, memarg)?,
-            Operator::I64Store { memarg } => store(MemWidth::B8, memarg)?,
-            Operator::I32Store8 { memarg } | Operator::I64Store8 { memarg } => {
-                store(MemWidth::B1, memarg)?
-            }
-            Operator::I32Store16 { memarg } | Operator::I64Store16 { memarg } => {
-                store(MemWidth::B2, memarg)?
-            }
-            Operator::I64Store32 { memarg } => store(MemWidth::B4, memarg)?,
+            Operator::I32Store { memarg } => store(ValType::I32, MemWidth::B4, memarg)?,
+            Operator::I64Store { memarg } => store(ValType::I64, MemWidth::B8, memarg)?,
+            Operator::I32Store8 { memarg } => store(ValType::I32, MemWidth::B1, memarg)?,
+            Operator::I64Store8 { memarg } => store(ValType::I64, MemWidth::B1, memarg)?,
+            Operator::I32Store16 { memarg } => store(ValType::I32, MemWidth::B2, memarg)?,
+            Operator::I64Store16 { memarg } => store(ValType::I64, MemWidth::B2, memarg)?,
+            Operator::I64Store32 { memarg } => store(ValType::I64, MemWidth::B4, memarg)?,
             Operator::MemorySize { mem: 0 } => WasmOp::MemorySize,
             Operator::MemoryGrow { mem: 0 } => WasmOp::MemoryGrow,
 

@@ -7,7 +7,7 @@ use jolt_wasm_backend::{
     check_record, Execution, ExecutionError, Machine, RamAccess, RowViolation, Trap,
 };
 use jolt_wasm_frontend::{DecodeError, WasmModule};
-use jolt_wasm_ir::layout::LINEAR_MEMORY_BASE;
+use jolt_wasm_ir::layout::{linear_address, LINEAR_MEMORY_BASE};
 use jolt_wasm_ir::{Ir, IrProgram, Reg};
 
 fn program(wat: &str) -> IrProgram {
@@ -131,8 +131,8 @@ fn memory_data_segment_and_narrow_access() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(store.address, LINEAR_MEMORY_BASE + 96);
-    assert_eq!(store.post_value, 0xbeef << 32);
+    assert_eq!(store.address, linear_address(100));
+    assert_eq!(store.post_value, 0xbeef);
     assert_eq!(store.pre_value, 0);
 }
 
@@ -413,4 +413,80 @@ fn unsupported_operators_are_typed_errors() {
         WasmModule::decode(&bytes),
         Err(DecodeError::Import { .. })
     ));
+}
+
+#[test]
+fn call_indirect_dispatches_through_the_table() {
+    // Slot 0: add, slot 1: mul, slot 2: null, slot 3: a function of another
+    // signature; `sub_t` shares add's signature through a distinct type index.
+    const WAT: &str = r#"
+(module
+  (type $binop (func (param i64 i64) (result i64)))
+  (type $binop2 (func (param i64 i64) (result i64)))
+  (type $unop (func (param i64) (result i64)))
+  (table 4 funcref)
+  (elem (i32.const 0) $add $mul)
+  (elem (i32.const 3) $neg)
+  (func $add (type $binop) (i64.add (local.get 0) (local.get 1)))
+  (func $mul (type $binop) (i64.mul (local.get 0) (local.get 1)))
+  (func $neg (type $unop) (i64.sub (i64.const 0) (local.get 0)))
+  (func (export "apply") (param $slot i32) (param $a i64) (param $b i64) (result i64)
+    (call_indirect (type $binop2) (local.get $a) (local.get $b) (local.get $slot))))
+"#;
+    let execution = run(WAT, "apply", &[0, 6, 7]);
+    assert_eq!(execution.results, vec![13]);
+    assert_eq!(call(WAT, "apply", &[1, 6, 7]).unwrap(), vec![42]);
+    let trap = |args: &[u64]| match call(WAT, "apply", args) {
+        Err(ExecutionError::Trap { trap, .. }) => trap,
+        other => panic!("expected a trap, got {other:?}"),
+    };
+    assert_eq!(trap(&[2, 1, 1]), Trap::IndirectCallTypeMismatch);
+    assert_eq!(trap(&[3, 1, 1]), Trap::IndirectCallTypeMismatch);
+    assert_eq!(trap(&[4, 1, 1]), Trap::TableOutOfBounds);
+    assert_eq!(trap(&[u64::from(u32::MAX), 1, 1]), Trap::TableOutOfBounds);
+}
+
+/// Operand forwarding hazards: a pending copy of a local that is then
+/// overwritten, `tee` chains, constants on either side of non-commutative
+/// operators, `select` whose operands alias its destination, and pending
+/// values carried into control flow and calls.
+#[test]
+fn forwarding_preserves_stack_semantics() {
+    const WAT: &str = r#"
+(module
+  (func $id (param i64) (result i64) (local.get 0))
+  (func (export "hazards") (param $a i64) (param $b i64) (result i64)
+    (local $t i64)
+    ;; pending copy of $a below a local.set of $a: must read the old value
+    (local.get $a)
+    (local.set $a (i64.const 100))
+    (local.get $a)
+    (i64.add)                                  ;; a + 100
+    (local.set $t)
+    ;; constant on the left of a subtraction, on the right of a shift
+    (i64.sub (i64.const 1000) (local.get $t))  ;; 1000 - (a + 100)
+    (i64.shl (i64.const 3))                     ;; << 3
+    (local.set $t)
+    ;; tee chain and select with aliased operands
+    (local.tee $a (local.get $t))
+    (local.get $b)
+    (i32.wrap_i64 (local.get $a))
+    (select)                                    ;; a != 0 ? t : b
+    (local.set $t)
+    ;; pending values carried through a branch and a call
+    (block (result i64)
+      (local.get $t)
+      (i64.const 7)
+      (br_if 0 (i64.eqz (local.get $b)))
+      (i64.add))
+    (call $id)
+    (i64.add (local.get $t))))
+"#;
+    let a: u64 = 5;
+    let b: u64 = 9;
+    let t = 1000u64.wrapping_sub(a + 100) << 3;
+    let selected = if t != 0 { t } else { b };
+    let expected = selected + 7 + selected;
+    assert_eq!(call(WAT, "hazards", &[a, b]).unwrap(), vec![expected]);
+    assert_eq!(call(WAT, "hazards", &[a, 0]).unwrap(), vec![7 + selected]);
 }

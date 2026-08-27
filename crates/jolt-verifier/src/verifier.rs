@@ -1365,6 +1365,7 @@ mod tests {
             },
             globals: Vec::new(),
             data: Vec::new(),
+            table: Vec::new(),
         };
         WasmProgramPreprocessing::new(&program, 16).unwrap()
     }
