@@ -23,8 +23,6 @@
 //! `HammingWeightClaimReduction*` names and reaches the live relation through the
 //! aliases re-exported from it, so no consumer needs a `cfg` of its own.
 
-#[cfg(feature = "akita")]
-use jolt_claims::protocols::jolt::lattice::geometry::balanced_inc_value;
 pub use jolt_claims::protocols::jolt::relations::claim_reductions::hamming_weight::HammingWeightClaimReductionChallenges;
 use jolt_claims::protocols::jolt::{
     geometry::ra::JoltRaPolynomialLayout, HammingWeightClaimReductionPublic, JoltDerivedId,
@@ -40,24 +38,11 @@ use crate::VerifierError;
 
 /// Base mode: the slot is a genuine Hamming-weight reduction over fully committed
 /// one-hot columns.
-#[cfg(not(feature = "akita"))]
 mod mode {
     pub use jolt_claims::protocols::jolt::geometry::claim_reductions::hamming_weight::HammingWeightClaimReductionDimensions as Dimensions;
     pub use jolt_claims::protocols::jolt::relations::claim_reductions::hamming_weight::{
         ClaimReduction as Symbolic, HammingWeightClaimReductionInputClaims as InputClaims,
         HammingWeightClaimReductionOutputClaims as OutputClaims,
-    };
-}
-
-/// Akita mode: the slot is the digit-zero reduction, which also carries the
-/// balanced-increment booleanity legs and the fused-increment decode leg.
-#[cfg(feature = "akita")]
-mod mode {
-    pub use jolt_claims::protocols::jolt::lattice::relations::digit_zero::{
-        LatticeDigitZeroClaimReduction as Symbolic,
-        LatticeDigitZeroClaimReductionDimensions as Dimensions,
-        LatticeDigitZeroClaimReductionInputClaims as InputClaims,
-        LatticeDigitZeroClaimReductionOutputClaims as OutputClaims,
     };
 }
 
@@ -78,16 +63,11 @@ pub fn hamming_weight_claim_reduction_dimensions(
     layout: JoltRaPolynomialLayout,
     log_k_chunk: usize,
 ) -> Result<HammingWeightClaimReductionDimensions, VerifierError> {
-    #[cfg(not(feature = "akita"))]
     {
         Ok(HammingWeightClaimReductionDimensions::new(
             layout,
             log_k_chunk,
         ))
-    }
-    #[cfg(feature = "akita")]
-    {
-        HammingWeightClaimReductionDimensions::new(layout, log_k_chunk).map_err(public_input_failed)
     }
 }
 
@@ -108,12 +88,6 @@ pub fn hamming_weight_input_values_from_upstream<F: JoltField>(
             .clone(),
         bytecode_virtualization: cycle_phase.bytecode_read_raf.bytecode_ra.clone(),
         ram_virtualization: cycle_phase.ram_ra_virtualization.ram_ra.clone(),
-        #[cfg(feature = "akita")]
-        balanced_inc_digit_booleanity: cycle_phase.booleanity.balanced_inc_digits.clone(),
-        #[cfg(feature = "akita")]
-        balanced_inc_carry_booleanity: cycle_phase.booleanity.balanced_inc_carry,
-        #[cfg(feature = "akita")]
-        fused_inc: cycle_phase.bytecode_read_raf.fused_inc,
     }
 }
 
@@ -274,13 +248,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for HammingWeightClaimReduction<F> {
             instruction_ra: vec![opening_point.clone(); layout.instruction()],
             bytecode_ra: vec![opening_point.clone(); layout.bytecode()],
             ram_ra: vec![opening_point.clone(); layout.ram()],
-            #[cfg(feature = "akita")]
-            balanced_inc_digits: vec![
-                opening_point.clone();
-                self.dimensions.chunking().chunk_count()
-            ],
-            #[cfg(feature = "akita")]
-            balanced_inc_carry: opening_point,
         })
     }
 
@@ -319,14 +286,7 @@ impl<F: JoltField> ConcreteSumcheck<F> for HammingWeightClaimReduction<F> {
                 Ok(eq_at_digit_zero(point))
             }
             HammingWeightClaimReductionPublic::BalancedIncValueAtAddress => {
-                #[cfg(feature = "akita")]
-                {
-                    Ok(balanced_inc_value(rho_rev))
-                }
-                #[cfg(not(feature = "akita"))]
-                {
-                    Err(VerifierError::MissingStageClaimDerived { id: *id })
-                }
+                Err(VerifierError::MissingStageClaimDerived { id: *id })
             }
         }
     }

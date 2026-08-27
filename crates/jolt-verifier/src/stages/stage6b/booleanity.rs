@@ -12,9 +12,6 @@
 //! which extends the same boolean fold over the increment digit and carry
 //! one-hot columns, all opened at the shared `(r_address ‖ r_cycle)` point.
 
-#[cfg(feature = "akita")]
-use jolt_claims::protocols::jolt::lattice::relations::booleanity as lattice_booleanity;
-#[cfg(not(feature = "akita"))]
 use jolt_claims::protocols::jolt::relations;
 pub use jolt_claims::protocols::jolt::relations::booleanity::{
     BooleanityCyclePhaseChallenges, BooleanityInputClaims, BooleanityOutputClaims,
@@ -29,18 +26,12 @@ use jolt_poly::try_eq_mle;
 use crate::stages::relations::{ConcreteSumcheck, SumcheckInputPoints, SumcheckOutputPoints};
 use crate::VerifierError;
 
-#[cfg(not(feature = "akita"))]
 type CyclePhaseSymbolic = relations::booleanity::BooleanityCyclePhase;
-#[cfg(feature = "akita")]
-type CyclePhaseSymbolic = lattice_booleanity::LatticeBooleanityCyclePhase;
 
 /// The cycle phase's shape: the base dimensions, plus (akita) the inc
 /// chunking they imply. The driver constructs it, keeping this member's
 /// constructor infallible.
-#[cfg(not(feature = "akita"))]
 pub type BooleanityCycleDimensions = BooleanityDimensions;
-#[cfg(feature = "akita")]
-pub type BooleanityCycleDimensions = lattice_booleanity::LatticeBooleanityDimensions;
 
 #[derive(Clone)]
 pub struct Booleanity<F: JoltField> {
@@ -70,13 +61,8 @@ impl<F: JoltField> Booleanity<F> {
     }
 
     fn base_dimensions(&self) -> &BooleanityDimensions {
-        #[cfg(not(feature = "akita"))]
         {
             &self.dimensions
-        }
-        #[cfg(feature = "akita")]
-        {
-            &self.dimensions.base
         }
     }
 
@@ -119,7 +105,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for Booleanity<F> {
         let r_cycle = sumcheck_point.iter().rev().copied().collect::<Vec<_>>();
         let opening_point = [self.r_address.as_slice(), r_cycle.as_slice()].concat();
         let layout = self.base_dimensions().layout;
-        #[cfg(not(feature = "akita"))]
         {
             let _ = &r_cycle;
             Ok(BooleanityOutputClaims {
@@ -128,17 +113,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for Booleanity<F> {
                 ram_ra: vec![opening_point; layout.ram()],
             })
         }
-        #[cfg(feature = "akita")]
-        Ok(lattice_booleanity::LatticeBooleanityOutputClaims {
-            instruction_ra: vec![opening_point.clone(); layout.instruction()],
-            bytecode_ra: vec![opening_point.clone(); layout.bytecode()],
-            ram_ra: vec![opening_point.clone(); layout.ram()],
-            balanced_inc_digits: vec![
-                opening_point.clone();
-                self.dimensions.chunking().chunk_count()
-            ],
-            balanced_inc_carry: opening_point,
-        })
     }
 
     fn derive_output_term(
@@ -197,8 +171,6 @@ mod tests {
     fn default_draw_challenges_matches_inline_booleanity_gamma() {
         let layout = JoltRaPolynomialLayout::new(1, 1, 1).unwrap();
         let dimensions = BooleanityDimensions::new(layout, 3, 2);
-        #[cfg(feature = "akita")]
-        let dimensions = lattice_booleanity::LatticeBooleanityDimensions::new(dimensions).unwrap();
         let relation = Booleanity::<Fr>::new(dimensions, Vec::new(), Vec::new(), Vec::new());
 
         let (inline_events, inline_gamma) = record(|t| t.challenge());

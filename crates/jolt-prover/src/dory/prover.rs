@@ -6,7 +6,6 @@ use core::any::Any;
 
 #[cfg(feature = "allocative")]
 use allocative::FlameGraphBuilder;
-use common::jolt_device::JoltDevice;
 use jolt_crypto::{HomomorphicCommitment, VectorCommitment};
 use jolt_field::{Accumulator, JoltField, WithAccumulator};
 use jolt_kernels::{JoltBackend, ProofSession};
@@ -32,6 +31,7 @@ use jolt_verifier::stages::stage6a::outputs::Stage6aClearOutput;
 use jolt_verifier::stages::stage6b::outputs::Stage6bClearOutput;
 #[cfg(feature = "allocative")]
 use jolt_verifier::stages::stage7::outputs::Stage7ClearOutput;
+use jolt_wasm_program::PublicIo;
 use jolt_witness::JoltWitnessPlane;
 
 use crate::dory::stages::stage0::{prove_stage0, TrustedAdviceCommitment};
@@ -113,7 +113,7 @@ pub fn prove<F, PCS, VC, T, W>(
     config: &ProverConfig,
     trusted_advice: Option<&TrustedAdviceCommitment<PCS>>,
     witness: &W,
-    public_io: &JoltDevice,
+    public_io: &PublicIo,
 ) -> Result<JoltProof<PCS, VC>, ProverError<F>>
 where
     F: JoltField + AppendToTranscript,

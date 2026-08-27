@@ -172,31 +172,12 @@ pub const ZK_MODE_SPANS: [&str; 2] = [
     "HomomorphicBatch::prove_batch_zk",
 ];
 
-/// Packed-mode (`akita` feature) seams: the `OneHotTrace` column assembly
-/// and native group commit at stage 0, the reconstruction phase at the head
-/// of the stage-8 region (span always fires; its sumcheck batch — the
-/// `Reconstruction::prove` driver span — runs only with advice or a
-/// committed program), and the native same-point stage-8 opening. The packed
-/// prover keeps `prove_uniskip_clear` (its recorders are clear; `akita` and
-/// `zk` are mutually exclusive) and fires no `commit_witness` /
-/// `stream_witnesses` / `JointOpeningPolynomials::prepare` /
-/// `HomomorphicBatch::*`.
-pub const AKITA_MODE_SPANS: [&str; 5] = [
-    "assemble_one_hot_trace",
-    "CommitmentScheme::commit_batch",
-    "prove_reconstruction",
-    "CommitmentScheme::open_batch",
-    "prove_uniskip_clear",
-];
-
 /// Which compiled prover emitted a trace: the `zk` feature swaps the
 /// [`CLEAR_MODE_SPANS`] seams for their [`ZK_MODE_SPANS`] siblings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProverMode {
     Clear,
     Zk,
-    /// The packed (lattice) prover — transparent by construction.
-    Akita,
 }
 
 /// Every v1 label that fires on all proves of the given mode: the presence
@@ -212,23 +193,11 @@ pub fn always_present_spans(mode: ProverMode) -> Vec<&'static str> {
     labels.extend(STAGE_SPANS);
     labels.extend(DRIVER_BATCH_SPANS);
     labels.extend(SUMCHECK_ENGINE_SPANS);
-    match mode {
-        ProverMode::Clear | ProverMode::Zk => {
-            labels.extend(KERNEL_SEAM_SPANS);
-            labels.extend(WITNESS_AND_OPENING_SPANS);
-        }
-        // The packed prover streams no witness commit and runs no
-        // homomorphic joint opening; its bundle collection and oracle reads
-        // still fire (stage-0 assembly, the naive kernels).
-        ProverMode::Akita => {
-            labels.extend(UNISKIP_SEAM_SPANS);
-            labels.extend(["collect_bundles", "TraceBackend::oracle_table"]);
-        }
-    }
+    labels.extend(KERNEL_SEAM_SPANS);
+    labels.extend(WITNESS_AND_OPENING_SPANS);
     labels.extend(match mode {
         ProverMode::Clear => CLEAR_MODE_SPANS.as_slice(),
         ProverMode::Zk => ZK_MODE_SPANS.as_slice(),
-        ProverMode::Akita => AKITA_MODE_SPANS.as_slice(),
     });
     labels
 }

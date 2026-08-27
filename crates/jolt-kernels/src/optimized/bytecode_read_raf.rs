@@ -52,8 +52,6 @@ use jolt_claims::protocols::jolt::geometry::dimensions::{
 use jolt_claims::protocols::jolt::JoltOpeningId;
 use jolt_claims::OutputClaims;
 use jolt_field::JoltField;
-#[cfg(feature = "akita")]
-use jolt_poly::BindingOrder;
 use jolt_poly::{IdentityPolynomial, MultilinearEvaluation, Polynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use jolt_verifier::stages::relations::{
@@ -213,16 +211,16 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafAddressPhase<F>>
         let cycles = 1usize << dimensions.log_t();
 
         let program = witness.program_preprocessing();
-        if program.bytecode.bytecode.len() != addresses {
+        if program.bytecode.rows().len() != addresses {
             return Err(KernelError::TableSizeMismatch {
                 table: "bytecode stage values".to_owned(),
                 expected: addresses,
-                got: program.bytecode.bytecode.len(),
+                got: program.bytecode.rows().len(),
             });
         }
         let stage_gammas = inputs.challenges.stage_gamma_powers();
         let stage_values = read_raf_stage_values(BytecodeReadRafStageValueInputs {
-            bytecode: &program.bytecode.bytecode,
+            bytecode: program.bytecode.rows(),
             register_read_write_point: &relation.register_read_write_point()
                 [..REGISTER_ADDRESS_BITS],
             register_val_evaluation_point: &relation.register_val_evaluation_point()
@@ -256,10 +254,7 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafAddressPhase<F>>
         let num_stages = base_stages + fused_cycle_points.len();
         let gamma_powers = gamma_powers(inputs.challenges.gamma, num_stages + 3);
 
-        #[cfg(not(feature = "akita"))]
         let row_weight = |_: &InstructionCycleRow| F::one();
-        #[cfg(feature = "akita")]
-        let row_weight = InstructionCycleRow::fused_inc::<F>;
         let pushforwards = stage_pushforwards::<F, _>(
             stage_cycle_points,
             fused_cycle_points,
@@ -275,22 +270,12 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafAddressPhase<F>>
         let values = (0..NUM_BYTECODE_VAL_STAGES)
             .map(|stage| Polynomial::new(stage_values.iter().map(|row| row[stage]).collect()))
             .collect::<Vec<_>>();
-        let mut stage_values = (0..base_stages).map(StageVal::Table).collect::<Vec<_>>();
         if !fused_cycle_points.is_empty() {
-            if fused_cycle_points.len() != bytecode::LATTICE_FUSED_INC_STAGES
-                || NUM_BYTECODE_VAL_STAGES != base_stages + 1
-            {
-                return Err(KernelError::InvariantViolation {
-                    reason: "packed bytecode read-raf stage shape is inconsistent",
-                });
-            }
-            stage_values.extend([
-                StageVal::Table(base_stages),
-                StageVal::Table(base_stages),
-                StageVal::Complement(base_stages),
-                StageVal::Complement(base_stages),
-            ]);
+            return Err(KernelError::InvariantViolation {
+                reason: "the bytecode read-raf stage shape is not the five-stage fold",
+            });
         }
+        let stage_values = (0..base_stages).map(StageVal::Table).collect::<Vec<_>>();
         let mut raf_weights = vec![F::zero(); num_stages];
         raf_weights[0] = gamma_powers[num_stages];
         raf_weights[2] = gamma_powers[num_stages - 1];
@@ -321,7 +306,6 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafAddressPhase<F>>
 #[cfg_attr(feature = "allocative", derive(allocative::Allocative))]
 enum StageVal {
     Table(usize),
-    Complement(usize),
 }
 
 #[cfg_attr(
@@ -354,17 +338,12 @@ impl<F: JoltField> AddressKernel<F> {
     fn stage_pair(&self, stage: usize, y: usize) -> (F, F) {
         match self.stage_values[stage] {
             StageVal::Table(index) => pair(&self.values[index], y),
-            StageVal::Complement(index) => {
-                let (lo, hi) = pair(&self.values[index], y);
-                (F::one() - lo, F::one() - hi)
-            }
         }
     }
 
     fn bound_stage_value(&self, stage: usize) -> F {
         match self.stage_values[stage] {
             StageVal::Table(index) => self.values[index].evals()[0],
-            StageVal::Complement(index) => F::one() - self.values[index].evals()[0],
         }
     }
 
@@ -466,93 +445,6 @@ impl<F: JoltField> SumcheckKernel<F> for AddressKernel<F> {
     }
 }
 
-/// The packed fused-increment cycle column, bound lazily while the bytecode
-/// RA factors still retain their shared compact rows. The fourth bind
-/// materializes only `T / 16` field elements and releases this handle.
-#[cfg(feature = "akita")]
-#[cfg_attr(
-    feature = "allocative",
-    derive(allocative::Allocative),
-    allocative(bound = "F: JoltField")
-)]
-enum LazyFusedInc<F: JoltField> {
-    Lazy {
-        #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
-        branch_weights: Vec<F>,
-        rows: Arc<Vec<InstructionCycleRow>>,
-    },
-    Dense(Polynomial<F>),
-}
-
-#[cfg(feature = "akita")]
-impl<F: JoltField> LazyFusedInc<F> {
-    fn new(rows: Arc<Vec<InstructionCycleRow>>) -> Self {
-        Self::Lazy {
-            branch_weights: vec![F::one()],
-            rows,
-        }
-    }
-
-    #[inline]
-    fn value(&self, index: usize) -> F {
-        match self {
-            Self::Lazy {
-                branch_weights,
-                rows,
-            } => branch_weights
-                .iter()
-                .enumerate()
-                .fold(F::zero(), |acc, (offset, weight)| {
-                    acc + *weight * rows[index * branch_weights.len() + offset].fused_inc::<F>()
-                }),
-            Self::Dense(polynomial) => polynomial.evals()[index],
-        }
-    }
-
-    #[inline]
-    fn lo_hi(&self, row: usize) -> (F, F) {
-        (self.value(2 * row), self.value(2 * row + 1))
-    }
-
-    fn bind(&mut self, challenge: F) {
-        *self = match std::mem::replace(self, Self::Dense(Polynomial::zeros(0))) {
-            Self::Lazy {
-                branch_weights,
-                rows,
-            } => {
-                let one_minus = F::one() - challenge;
-                let mut next = Vec::with_capacity(2 * branch_weights.len());
-                next.extend(branch_weights.iter().map(|weight| one_minus * *weight));
-                next.extend(branch_weights.iter().map(|weight| challenge * *weight));
-                if next.len() < 16 {
-                    Self::Lazy {
-                        branch_weights: next,
-                        rows,
-                    }
-                } else {
-                    let len = rows.len() / next.len();
-                    let evaluate = |index: usize| {
-                        next.iter()
-                            .enumerate()
-                            .fold(F::zero(), |acc, (offset, weight)| {
-                                acc + *weight * rows[index * next.len() + offset].fused_inc::<F>()
-                            })
-                    };
-                    #[cfg(feature = "parallel")]
-                    let evals = (0..len).into_par_iter().map(evaluate).collect();
-                    #[cfg(not(feature = "parallel"))]
-                    let evals = (0..len).map(evaluate).collect();
-                    Self::Dense(Polynomial::new(evals))
-                }
-            }
-            Self::Dense(mut polynomial) => {
-                polynomial.bind_with_order(challenge, BindingOrder::LowToHigh);
-                Self::Dense(polynomial)
-            }
-        };
-    }
-}
-
 /// Stage-6b cycle phase: `PrepareKernel` front of the optimized kernel.
 pub struct OptimizedBytecodeReadRafCycle;
 
@@ -589,8 +481,6 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafCycle<F>> for OptimizedByteco
                     .map_err(KernelError::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        #[cfg(feature = "akita")]
-        let fused_inc = LazyFusedInc::new(Arc::clone(&rows));
         let ra = LazyFoldedRa::new(chunk_eqs, BytecodePcChunks { rows, selectors });
 
         // The combined coefficient table: every non-RA factor of the summand
@@ -634,32 +524,6 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafCycle<F>> for OptimizedByteco
         let entry_scalar = eq_table(r_address)[relation.entry_bytecode_index()];
         combined[0] += gamma_powers[num_stages + 2] * entry_scalar;
 
-        #[cfg(feature = "akita")]
-        let fused_combined = {
-            let store = stage_values[base_stages];
-            let mut combined = vec![F::zero(); cycles];
-            for stage in base_stages..num_stages {
-                let value = if stage < base_stages + 2 {
-                    store
-                } else {
-                    F::one() - store
-                };
-                let scaled =
-                    scaled_eq_table(&stage_cycle_points[stage], gamma_powers[stage] * value);
-                #[cfg(feature = "parallel")]
-                combined
-                    .par_iter_mut()
-                    .zip(scaled.par_iter())
-                    .for_each(|(acc, term)| *acc += *term);
-                #[cfg(not(feature = "parallel"))]
-                combined
-                    .iter_mut()
-                    .zip(scaled.iter())
-                    .for_each(|(acc, term)| *acc += *term);
-            }
-            Polynomial::new(combined)
-        };
-
         let output_openings = bytecode::read_raf_output_openings(dimensions).bytecode_ra;
         if output_openings.len() != num_ra {
             return Err(KernelError::InvariantViolation {
@@ -672,10 +536,6 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafCycle<F>> for OptimizedByteco
             degree: relation.degree(),
             ra,
             combined: Polynomial::new(combined),
-            #[cfg(feature = "akita")]
-            fused_inc,
-            #[cfg(feature = "akita")]
-            fused_combined,
             output_openings,
         }))
     }
@@ -715,10 +575,6 @@ struct CycleKernel<F: JoltField> {
     degree: usize,
     ra: LazyFoldedRa<F, BytecodePcChunks>,
     combined: Polynomial<F>,
-    #[cfg(feature = "akita")]
-    fused_inc: LazyFusedInc<F>,
-    #[cfg(feature = "akita")]
-    fused_combined: Polynomial<F>,
     /// The produced `BytecodeRa` opening ids, in `read_raf_output_openings`
     /// order (index-aligned with `ra`).
     #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
@@ -727,11 +583,7 @@ struct CycleKernel<F: JoltField> {
 impl<F: JoltField> CycleKernel<F> {
     fn bind(&mut self, challenge: F) {
         bind_all([&mut self.combined], challenge);
-        #[cfg(feature = "akita")]
-        bind_all([&mut self.fused_combined], challenge);
         self.ra.bind(challenge);
-        #[cfg(feature = "akita")]
-        self.fused_inc.bind(challenge);
         self.progress.advance();
     }
 
@@ -743,31 +595,16 @@ impl<F: JoltField> CycleKernel<F> {
     fn accumulate_group(&self, y: usize, acc: &mut [F], ra_pairs: &mut [(F, F)]) {
         let (c_lo, c_hi) = pair(&self.combined, y);
         let c_delta = c_hi - c_lo;
-        #[cfg(feature = "akita")]
-        let (fused_coefficient_lo, fused_coefficient_hi) = pair(&self.fused_combined, y);
-        #[cfg(feature = "akita")]
-        let fused_coefficient_delta = fused_coefficient_hi - fused_coefficient_lo;
-        #[cfg(feature = "akita")]
-        let (fused_inc_lo, fused_inc_hi) = self.fused_inc.lo_hi(y);
-        #[cfg(feature = "akita")]
-        let fused_inc_delta = fused_inc_hi - fused_inc_lo;
         for (i, slot) in ra_pairs.iter_mut().enumerate() {
             *slot = self.ra.lo_hi(i, y);
         }
-        #[cfg(not(feature = "akita"))]
         let coefficient_at_zero = c_lo;
-        #[cfg(feature = "akita")]
-        let coefficient_at_zero = c_lo + fused_inc_lo * fused_coefficient_lo;
         acc[0] += ra_pairs
             .iter()
             .fold(coefficient_at_zero, |acc, (lo, _)| acc * *lo);
         for (slot, t) in (2..=self.degree).enumerate() {
             let t_value = F::from_u64(t as u64);
             let coefficient = c_lo + t_value * c_delta;
-            #[cfg(feature = "akita")]
-            let coefficient = coefficient
-                + (fused_inc_lo + t_value * fused_inc_delta)
-                    * (fused_coefficient_lo + t_value * fused_coefficient_delta);
             acc[slot + 1] += ra_pairs.iter().fold(coefficient, |acc, (lo, hi)| {
                 acc * (*lo + t_value * (*hi - *lo))
             });
@@ -820,10 +657,6 @@ impl<F: JoltField> SumcheckKernel<F> for CycleKernel<F> {
         let ra = &self.ra;
         let output_openings = &self.output_openings;
         SumcheckOutputClaims::<F, Self::Relation>::from_opening_values(|id: &JoltOpeningId| {
-            #[cfg(feature = "akita")]
-            if *id == bytecode::fused_inc_read_raf_opening() {
-                return Some(self.fused_inc.value(0));
-            }
             output_openings
                 .iter()
                 .position(|opening| opening == id)
@@ -929,7 +762,7 @@ mod stage_pushforward_tests {
 /// cycle kernel's multi-factor `Π_i ra_i` loop runs with one factor; the
 /// degree-`d+1` sampling, cold-cycle zeroing, entry/RAF fusion, and both
 /// pushforward paths are exercised for real.
-#[cfg(all(test, not(feature = "akita")))]
+#[cfg(test)]
 #[expect(clippy::unwrap_used, reason = "test module")]
 mod tests {
     use jolt_claims::protocols::jolt::geometry::bytecode::BytecodeReadRafDimensions;
@@ -970,7 +803,7 @@ mod tests {
                 probe_one_hot_family(backend, JoltCommittedPolynomial::BytecodeRa, log_t);
             assert!(bytecode_d > 0, "fixture serves no BytecodeRa polynomials");
             let program = backend.program_preprocessing();
-            let bytecode_len = program.bytecode.bytecode.len();
+            let bytecode_len = program.bytecode.rows().len();
             assert!(bytecode_len.is_power_of_two());
             let log_k = bytecode_len.ilog2() as usize;
             let dimensions = BytecodeReadRafDimensions::new(log_t, log_k, bytecode_d);
@@ -1063,7 +896,7 @@ mod tests {
                 entry_bytecode_index,
                 committed_chunk_bits: chunk_bits,
                 table_fold: Some(BytecodeReadRafTableFoldInputs {
-                    bytecode: &program.bytecode.bytecode,
+                    bytecode: program.bytecode.rows(),
                     register_read_write_point: &stage_points.register_read_write_point
                         [..REGISTER_ADDRESS_BITS],
                     register_val_evaluation_point: &stage_points.register_val_evaluation_point
@@ -1125,209 +958,5 @@ mod tests {
     #[test]
     fn bytecode_phases_match_reference_in_committed_program_mode() {
         run_pair(true);
-    }
-}
-
-#[cfg(all(test, feature = "akita"))]
-#[expect(clippy::unwrap_used, reason = "test module")]
-mod akita_tests {
-    use jolt_claims::protocols::jolt::geometry::bytecode::BytecodeReadRafDimensions;
-    use jolt_claims::protocols::jolt::lattice::relations::read_raf::LatticeReadRafAddressPhaseInputClaims;
-    use jolt_claims::protocols::jolt::relations::bytecode::BytecodeReadRafAddressPhaseChallenges;
-    use jolt_field::{Fr, Ring};
-    use jolt_verifier::stages::stage6a::bytecode_read_raf::BytecodeStagePoints;
-    use jolt_verifier::stages::stage6b::bytecode_read_raf::{
-        BytecodeReadRafCycleInputs, BytecodeReadRafCyclePhaseCommittedChallenges,
-        BytecodeReadRafInputClaims, BytecodeReadRafTableFoldInputs,
-    };
-    use jolt_witness::ProgramSource;
-
-    use super::*;
-    use crate::optimized::booleanity::testing::with_booleanity_backend;
-    use crate::optimized::parity::{probe_input_claim, run_lockstep, synthetic_point};
-    use crate::ReferenceBackend;
-
-    fn address_parity(log_t: usize, log_k_chunk: u8, committed_program: bool) {
-        with_booleanity_backend(log_t, log_k_chunk, |backend, base_dimensions| {
-            let bytecode_len = backend.program_preprocessing().bytecode.bytecode.len();
-            let dimensions = BytecodeReadRafDimensions::new(
-                log_t,
-                bytecode_len.ilog2() as usize,
-                base_dimensions.layout.bytecode(),
-            );
-            let relation = BytecodeReadRafAddressPhase::new(
-                dimensions,
-                committed_program,
-                BytecodeStagePoints {
-                    stage_cycle_points: std::array::from_fn(|stage| {
-                        synthetic_point(log_t, 11 + stage as u64)
-                    }),
-                    register_read_write_point: synthetic_point(REGISTER_ADDRESS_BITS + log_t, 23),
-                    register_val_evaluation_point: synthetic_point(
-                        REGISTER_ADDRESS_BITS + log_t,
-                        29,
-                    ),
-                    fused_inc_cycle_points: (0..bytecode::LATTICE_FUSED_INC_STAGES)
-                        .map(|stage| synthetic_point(log_t, 41 + stage as u64))
-                        .collect(),
-                },
-                0,
-            );
-            let challenges = BytecodeReadRafAddressPhaseChallenges {
-                gamma: Fr::from_u64(3),
-                stage1_gamma: Fr::from_u64(5),
-                stage2_gamma: Fr::from_u64(7),
-                stage3_gamma: Fr::from_u64(11),
-                stage4_gamma: Fr::from_u64(13),
-                stage5_gamma: Fr::from_u64(17),
-            };
-            let claims = LatticeReadRafAddressPhaseInputClaims::<Fr>::default();
-            let input_points = LatticeReadRafAddressPhaseInputClaims::<Vec<Fr>>::default();
-
-            let mut session = ProofSession::default();
-            let mut reference = ReferenceBackend
-                .prepare(
-                    &mut session,
-                    backend,
-                    ProverInputs {
-                        relation: &relation,
-                        claims: &claims,
-                        points: &input_points,
-                        challenges: &challenges,
-                    },
-                )
-                .unwrap();
-            let mut optimized = OptimizedBytecodeReadRafAddress
-                .prepare(
-                    &mut session,
-                    backend,
-                    ProverInputs {
-                        relation: &relation,
-                        claims: &claims,
-                        points: &input_points,
-                        challenges: &challenges,
-                    },
-                )
-                .unwrap();
-
-            let claim = probe_input_claim(reference.as_mut());
-            run_lockstep(
-                reference.as_mut(),
-                optimized.as_mut(),
-                claim,
-                &synthetic_point(dimensions.log_k(), 101),
-            );
-            let reference = reference.output_claims(&claims).unwrap();
-            let optimized = optimized.output_claims(&claims).unwrap();
-            assert_eq!(reference, optimized);
-            assert_eq!(
-                optimized.val_stages.len(),
-                if committed_program {
-                    NUM_BYTECODE_VAL_STAGES
-                } else {
-                    0
-                }
-            );
-        });
-    }
-
-    fn cycle_parity(log_t: usize, log_k_chunk: u8) {
-        with_booleanity_backend(log_t, log_k_chunk, |backend, base_dimensions| {
-            let program = backend.program_preprocessing();
-            let bytecode_len = program.bytecode.bytecode.len();
-            let dimensions = BytecodeReadRafDimensions::new(
-                log_t,
-                bytecode_len.ilog2() as usize,
-                base_dimensions.layout.bytecode(),
-            );
-            let stage_cycle_points =
-                std::array::from_fn(|stage| synthetic_point(log_t, 11 + stage as u64));
-            let address_challenges = BytecodeReadRafAddressPhaseChallenges {
-                gamma: Fr::from_u64(3),
-                stage1_gamma: Fr::from_u64(5),
-                stage2_gamma: Fr::from_u64(7),
-                stage3_gamma: Fr::from_u64(11),
-                stage4_gamma: Fr::from_u64(13),
-                stage5_gamma: Fr::from_u64(17),
-            };
-            let stage_gammas = address_challenges.stage_gamma_powers();
-            let relation = BytecodeReadRafCycle::full(BytecodeReadRafCycleInputs {
-                dimensions,
-                r_address: synthetic_point(dimensions.log_k(), 19),
-                stage_cycle_points,
-                entry_bytecode_index: 0,
-                committed_chunk_bits: usize::from(log_k_chunk),
-                table_fold: Some(BytecodeReadRafTableFoldInputs {
-                    bytecode: &program.bytecode.bytecode,
-                    register_read_write_point: &synthetic_point(REGISTER_ADDRESS_BITS, 23),
-                    register_val_evaluation_point: &synthetic_point(REGISTER_ADDRESS_BITS, 29),
-                    stage_gammas: std::array::from_fn(|stage| stage_gammas[stage].as_slice()),
-                }),
-            })
-            .unwrap();
-            let challenges = BytecodeReadRafCyclePhaseCommittedChallenges {
-                gamma: Fr::from_u64(31),
-            };
-            let claims = BytecodeReadRafInputClaims::<Fr>::default();
-            let input_points = BytecodeReadRafInputClaims::<Vec<Fr>>::default();
-
-            let mut session = ProofSession::default();
-            let mut reference = ReferenceBackend
-                .prepare(
-                    &mut session,
-                    backend,
-                    ProverInputs {
-                        relation: &relation,
-                        claims: &claims,
-                        points: &input_points,
-                        challenges: &challenges,
-                    },
-                )
-                .unwrap();
-            let mut optimized = OptimizedBytecodeReadRafCycle
-                .prepare(
-                    &mut session,
-                    backend,
-                    ProverInputs {
-                        relation: &relation,
-                        claims: &claims,
-                        points: &input_points,
-                        challenges: &challenges,
-                    },
-                )
-                .unwrap();
-
-            let claim = probe_input_claim(reference.as_mut());
-            run_lockstep(
-                reference.as_mut(),
-                optimized.as_mut(),
-                claim,
-                &synthetic_point(log_t, 211),
-            );
-            assert_eq!(
-                reference.output_claims(&claims).unwrap(),
-                optimized.output_claims(&claims).unwrap()
-            );
-        });
-    }
-
-    #[test]
-    fn bytecode_cycle_matches_reference_k16() {
-        cycle_parity(2, 4);
-    }
-
-    #[test]
-    fn bytecode_cycle_matches_reference_k256() {
-        cycle_parity(3, 8);
-    }
-
-    #[test]
-    fn bytecode_address_matches_reference_k16() {
-        address_parity(2, 4, false);
-    }
-
-    #[test]
-    fn bytecode_address_matches_reference_k256_committed() {
-        address_parity(3, 8, true);
     }
 }

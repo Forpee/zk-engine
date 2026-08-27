@@ -34,12 +34,6 @@ pub(crate) mod num {
         value as u64
     }
 
-    /// Widens `usize` to `u128`.
-    #[cfg(feature = "akita")]
-    pub(crate) fn u128_from_usize(value: usize) -> u128 {
-        u128::from(u64_from_usize(value))
-    }
-
     /// `value.ilog2()` as `usize`. Panics on zero, exactly as `usize::ilog2`
     /// does; callers pass validated power-of-two dimensions.
     #[expect(
@@ -70,9 +64,6 @@ pub use preprocessing::{
     CommittedProgramPreprocessing, JoltVerifierPreprocessing, ProgramPreprocessing,
 };
 pub use proof::{ClearProofClaims, JoltProof, JoltProofClaims};
-#[cfg(feature = "akita")]
-pub use verifier::absorb_packed_commitments;
-#[cfg(not(feature = "akita"))]
 pub use verifier::absorb_transcript_commitments;
 pub use verifier::{
     absorb_committed_program_commitments, absorb_transcript_preamble, validate_and_seed_transcript,

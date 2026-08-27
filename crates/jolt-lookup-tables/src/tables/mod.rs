@@ -1,7 +1,5 @@
-//! Lookup table definitions for Jolt instruction decomposition.
-//!
-//! Each instruction that participates in the sumcheck-based lookup argument
-//! maps to exactly one [`LookupTableKind`]. Concrete table implementations
+//! Lookup table definitions for the instruction lookup argument. Concrete
+//! table implementations (catalogued per frontend, e.g. `jolt-wasm-tables`)
 //! provide [`materialize_entry`](crate::LookupTable::materialize_entry) for
 //! preprocessing and [`evaluate_mle`](crate::LookupTable::evaluate_mle) for
 //! the sumcheck verifier.
@@ -10,10 +8,6 @@
 //! are `XLEN = 64` (production) and `XLEN = 8` (full-hypercube tests).
 
 use jolt_field::JoltField;
-use serde::{Deserialize, Serialize};
-
-use crate::challenge_ops::{ChallengeOps, FieldOps};
-use crate::traits::LookupTable;
 
 pub mod align_addr;
 pub mod and;
@@ -66,49 +60,6 @@ pub mod xor;
 pub use prefixes::{PrefixEval, Prefixes};
 pub use suffixes::{SuffixEval, Suffixes};
 
-use align_addr::AlignAddrTable;
-use and::AndTable;
-use andn::AndnTable;
-use equal::EqualTable;
-use halfword_alignment::HalfwordAlignmentTable;
-use lower_half_word::LowerHalfWordTable;
-use mulu_no_overflow::MulUNoOverflowTable;
-use not_equal::NotEqualTable;
-use or::OrTable;
-use pext::PextTable;
-use pext_signed::PextSignedTable;
-use pow2::Pow2Table;
-use pow2_w::Pow2WTable;
-use range_check::RangeCheckTable;
-use range_check_aligned::RangeCheckAlignedTable;
-use shift_right_bitmask::ShiftRightBitmaskTable;
-use shift_right_bitmask_w::ShiftRightBitmaskWTable;
-use sign_extend_word::SignExtendWordTable;
-use sign_mask::SignMaskTable;
-use signed_greater_than_equal::SignedGreaterThanEqualTable;
-use signed_less_than::SignedLessThanTable;
-use unsigned_greater_than_equal::UnsignedGreaterThanEqualTable;
-use unsigned_less_than::UnsignedLessThanTable;
-use unsigned_less_than_equal::UnsignedLessThanEqualTable;
-use upper_word::UpperWordTable;
-use valid_div0::ValidDiv0Table;
-use valid_unsigned_remainder::ValidUnsignedRemainderTable;
-use virtual_negate_if::VirtualNegateIfTable;
-use virtual_rev8w::VirtualRev8WTable;
-use virtual_rotr::VirtualROTRTable;
-use virtual_rotrw::VirtualROTRWTable;
-use virtual_sra::VirtualSRATable;
-use virtual_sraw::VirtualSRAWTable;
-use virtual_srl::VirtualSRLTable;
-use virtual_srlw::VirtualSRLWTable;
-use virtual_xor_rot::VirtualXORROTTable;
-use virtual_xor_rotw::VirtualXORROTWTable;
-use window_mask_b::WindowMaskBTable;
-use window_mask_h::WindowMaskHTable;
-use window_mask_w::WindowMaskWTable;
-use word_alignment::WordAlignmentTable;
-use xor::XorTable;
-
 /// Identifies a lookup table type at a given word size.
 ///
 /// Each variant carries the corresponding zero-sized table marker. Instructions
@@ -117,182 +68,6 @@ use xor::XorTable;
 ///
 /// Variant indices match `jolt-prover-legacy::LookupTables` so lookup-table flags in
 /// core-produced proofs can be interpreted without an adapter.
-#[expect(clippy::unsafe_derive_deserialize)]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    strum::EnumCount,
-    strum::EnumIter,
-)]
-#[repr(u8)]
-pub enum LookupTableKind<const XLEN: usize> {
-    RangeCheck(RangeCheckTable<XLEN>),
-    RangeCheckAligned(RangeCheckAlignedTable<XLEN>),
-    And(AndTable<XLEN>),
-    Andn(AndnTable<XLEN>),
-    Or(OrTable<XLEN>),
-    Xor(XorTable<XLEN>),
-    Equal(EqualTable<XLEN>),
-    SignedGreaterThanEqual(SignedGreaterThanEqualTable<XLEN>),
-    UnsignedGreaterThanEqual(UnsignedGreaterThanEqualTable<XLEN>),
-    NotEqual(NotEqualTable<XLEN>),
-    SignedLessThan(SignedLessThanTable<XLEN>),
-    UnsignedLessThan(UnsignedLessThanTable<XLEN>),
-    SignMask(SignMaskTable<XLEN>),
-    UpperWord(UpperWordTable<XLEN>),
-    UnsignedLessThanEqual(UnsignedLessThanEqualTable<XLEN>),
-    ValidUnsignedRemainder(ValidUnsignedRemainderTable<XLEN>),
-    ValidDiv0(ValidDiv0Table<XLEN>),
-    HalfwordAlignment(HalfwordAlignmentTable<XLEN>),
-    WordAlignment(WordAlignmentTable<XLEN>),
-    LowerHalfWord(LowerHalfWordTable<XLEN>),
-    SignExtendWord(SignExtendWordTable<XLEN>),
-    Pow2(Pow2Table<XLEN>),
-    Pow2W(Pow2WTable<XLEN>),
-    ShiftRightBitmask(ShiftRightBitmaskTable<XLEN>),
-    VirtualRev8W(VirtualRev8WTable<XLEN>),
-    VirtualSRL(VirtualSRLTable<XLEN>),
-    VirtualSRA(VirtualSRATable<XLEN>),
-    VirtualROTR(VirtualROTRTable<XLEN>),
-    VirtualROTRW(VirtualROTRWTable<XLEN>),
-    VirtualNegateIf(VirtualNegateIfTable<XLEN>),
-    MulUNoOverflow(MulUNoOverflowTable<XLEN>),
-    VirtualXORROT32(VirtualXORROTTable<XLEN, 32>),
-    VirtualXORROT24(VirtualXORROTTable<XLEN, 24>),
-    VirtualXORROT16(VirtualXORROTTable<XLEN, 16>),
-    VirtualXORROT63(VirtualXORROTTable<XLEN, 63>),
-    VirtualXORROTW16(VirtualXORROTWTable<XLEN, 16>),
-    VirtualXORROTW12(VirtualXORROTWTable<XLEN, 12>),
-    VirtualXORROTW8(VirtualXORROTWTable<XLEN, 8>),
-    VirtualXORROTW7(VirtualXORROTWTable<XLEN, 7>),
-    WindowMaskW(WindowMaskWTable<XLEN>),
-    PextSigned(PextSignedTable<XLEN>),
-    VirtualXORROTW22(VirtualXORROTWTable<XLEN, 22>),
-    VirtualXORROTW19(VirtualXORROTWTable<XLEN, 19>),
-    VirtualXORROTW6(VirtualXORROTWTable<XLEN, 6>),
-    ShiftRightBitmaskW(ShiftRightBitmaskWTable<XLEN>),
-    VirtualSRLW(VirtualSRLWTable<XLEN>),
-    VirtualSRAW(VirtualSRAWTable<XLEN>),
-    Pext(PextTable<XLEN>),
-    WindowMaskB(WindowMaskBTable<XLEN>),
-    WindowMaskH(WindowMaskHTable<XLEN>),
-    AlignAddr(AlignAddrTable<XLEN>),
-}
-
-/// Dispatches a method call to the inner table for every
-/// [`LookupTableKind`] variant, binding the inner table to `$t` and
-/// evaluating `$expr`. Variants are listed once here so that
-/// [`LookupTableKind`]'s dispatch methods stay a single line each.
-macro_rules! dispatch {
-    ($self:expr, $t:ident => $expr:expr) => {
-        match $self {
-            Self::RangeCheck($t) => $expr,
-            Self::RangeCheckAligned($t) => $expr,
-            Self::And($t) => $expr,
-            Self::Andn($t) => $expr,
-            Self::Or($t) => $expr,
-            Self::Xor($t) => $expr,
-            Self::Equal($t) => $expr,
-            Self::SignedGreaterThanEqual($t) => $expr,
-            Self::UnsignedGreaterThanEqual($t) => $expr,
-            Self::NotEqual($t) => $expr,
-            Self::SignedLessThan($t) => $expr,
-            Self::UnsignedLessThan($t) => $expr,
-            Self::SignMask($t) => $expr,
-            Self::UpperWord($t) => $expr,
-            Self::UnsignedLessThanEqual($t) => $expr,
-            Self::ValidUnsignedRemainder($t) => $expr,
-            Self::ValidDiv0($t) => $expr,
-            Self::HalfwordAlignment($t) => $expr,
-            Self::WordAlignment($t) => $expr,
-            Self::LowerHalfWord($t) => $expr,
-            Self::SignExtendWord($t) => $expr,
-            Self::Pow2($t) => $expr,
-            Self::Pow2W($t) => $expr,
-            Self::ShiftRightBitmask($t) => $expr,
-            Self::VirtualRev8W($t) => $expr,
-            Self::VirtualSRL($t) => $expr,
-            Self::VirtualSRA($t) => $expr,
-            Self::VirtualROTR($t) => $expr,
-            Self::VirtualROTRW($t) => $expr,
-            Self::VirtualNegateIf($t) => $expr,
-            Self::MulUNoOverflow($t) => $expr,
-            Self::VirtualXORROT32($t) => $expr,
-            Self::VirtualXORROT24($t) => $expr,
-            Self::VirtualXORROT16($t) => $expr,
-            Self::VirtualXORROT63($t) => $expr,
-            Self::VirtualXORROTW16($t) => $expr,
-            Self::VirtualXORROTW12($t) => $expr,
-            Self::VirtualXORROTW8($t) => $expr,
-            Self::VirtualXORROTW7($t) => $expr,
-            Self::WindowMaskW($t) => $expr,
-            Self::PextSigned($t) => $expr,
-            Self::VirtualXORROTW22($t) => $expr,
-            Self::VirtualXORROTW19($t) => $expr,
-            Self::VirtualXORROTW6($t) => $expr,
-            Self::ShiftRightBitmaskW($t) => $expr,
-            Self::VirtualSRLW($t) => $expr,
-            Self::VirtualSRAW($t) => $expr,
-            Self::Pext($t) => $expr,
-            Self::WindowMaskB($t) => $expr,
-            Self::WindowMaskH($t) => $expr,
-            Self::AlignAddr($t) => $expr,
-        }
-    };
-}
-
-impl<const XLEN: usize> LookupTableKind<XLEN> {
-    pub const COUNT: usize = <Self as strum::EnumCount>::COUNT;
-
-    pub fn iter() -> <Self as strum::IntoEnumIterator>::Iterator {
-        <Self as strum::IntoEnumIterator>::iter()
-    }
-
-    /// Returns the discriminant as a `usize`, suitable for array indexing.
-    #[inline]
-    pub fn index(&self) -> usize {
-        // SAFETY: `LookupTableKind` is `#[repr(u8)]`, so its first byte is the
-        // discriminant. See:
-        // https://doc.rust-lang.org/reference/items/enumerations.html#pointer-casting
-        let byte = unsafe { *std::ptr::from_ref::<Self>(self).cast::<u8>() };
-        byte as usize
-    }
-
-    pub fn materialize_entry(&self, index: u128) -> u64 {
-        dispatch!(self, t => t.materialize_entry(index))
-    }
-
-    pub fn evaluate_mle<F, C>(&self, r: &[C]) -> F
-    where
-        C: ChallengeOps<F>,
-        F: JoltField + FieldOps<C>,
-    {
-        dispatch!(self, t => t.evaluate_mle(r))
-    }
-
-    pub fn suffixes(&self) -> &'static [Suffixes] {
-        dispatch!(self, t => PrefixSuffixDecomposition::suffixes(t))
-    }
-
-    pub fn prefixes(&self) -> &'static [Prefixes] {
-        dispatch!(self, t => PrefixSuffixDecomposition::prefixes(t))
-    }
-
-    pub fn combine<F: JoltField>(
-        &self,
-        prefixes: &[PrefixEval<F>],
-        suffixes: &[SuffixEval<F>],
-    ) -> F {
-        dispatch!(self, t => PrefixSuffixDecomposition::combine(t, prefixes, suffixes))
-    }
-}
-
 /// Prefix/suffix decomposition for sub-linear MLE evaluation.
 ///
 /// Each lookup table decomposes its MLE as:

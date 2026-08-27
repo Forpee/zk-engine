@@ -17,8 +17,8 @@ use jolt_claims::protocols::jolt::{
     BytecodeClaimReductionLayout, JoltCommittedPolynomial, PrecommittedReductionLayout,
 };
 use jolt_field::JoltField;
-use jolt_riscv::JoltInstructionRow;
 use jolt_verifier::stages::stage6b::outputs::BytecodeReductionWeights;
+use jolt_wasm_ir::BytecodeRow;
 
 use crate::ProverInputs;
 use jolt_verifier::stages::stage6b::committed_reduction_cycle_phase::BytecodeReductionCyclePhase;
@@ -42,7 +42,7 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReductionCyclePhase<F>> for Referenc
         Ok(Box::new(bytecode_reduction_kernel(
             layout,
             inputs.relation.weights(),
-            &program.bytecode.bytecode,
+            program.bytecode.rows(),
         )?))
     }
 }
@@ -52,7 +52,7 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReductionCyclePhase<F>> for Referenc
 fn bytecode_reduction_kernel<F: JoltField>(
     layout: &BytecodeClaimReductionLayout,
     weights: &BytecodeReductionWeights<F>,
-    bytecode: &[JoltInstructionRow],
+    bytecode: &[BytecodeRow],
 ) -> Result<CycleReductionKernel<F, BytecodeReductionCyclePhase<F>>, KernelError<F>> {
     let reduction = layout.precommitted().clone();
     let chunk_coeffs: Vec<Vec<F>> = build_committed_bytecode_chunk_coeffs(

@@ -1,11 +1,7 @@
 use super::outputs::Stage8Output;
-#[cfg(not(feature = "akita"))]
 use super::outputs::{Stage8ClearOutput, Stage8ZkOutput};
-#[cfg(not(feature = "akita"))]
 use super::precommitted::{precommitted_final_openings, PrecommittedFinalOpening};
-#[cfg(not(feature = "akita"))]
 use crate::proof::JoltCommitments;
-#[cfg(not(feature = "akita"))]
 use crate::stages::{stage6b::outputs::Stage6bOutputClaims, stage7::outputs::Stage7OutputClaims};
 use crate::{
     preprocessing::JoltVerifierPreprocessing,
@@ -15,9 +11,7 @@ use crate::{
     VerifierError,
 };
 use jolt_claims::protocols::jolt::geometry::dimensions::JoltFormulaDimensions;
-#[cfg(not(feature = "akita"))]
 use jolt_claims::protocols::jolt::JoltOpeningId;
-#[cfg(not(feature = "akita"))]
 use jolt_claims::protocols::jolt::{
     geometry::{
         committed_openings::{
@@ -28,23 +22,18 @@ use jolt_claims::protocols::jolt::{
     },
     JoltCommittedPolynomial, JoltRelationId,
 };
-#[cfg(not(feature = "akita"))]
 use jolt_crypto::HomomorphicCommitment;
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
 use jolt_openings::CommitmentScheme;
-#[cfg(not(feature = "akita"))]
 use jolt_openings::{
     AdditivelyHomomorphic, EvaluationClaim, VerifierOpeningClaim, ZkEvaluationClaim,
     ZkOpeningScheme,
 };
-#[cfg(not(feature = "akita"))]
 use jolt_poly::Point;
-#[cfg(not(feature = "akita"))]
 use jolt_transcript::LabelWithCount;
 use jolt_transcript::{AppendToTranscript, Transcript};
 
-#[cfg(not(feature = "akita"))]
 /// One assembled final-opening batch entry. Public because the prover's
 /// stage-8 recipe assembles its PCS batch statement through the same
 /// [`batch_entries`] wiring.
@@ -62,7 +51,6 @@ pub struct Stage8BatchEntry<'a, F: JoltField, C> {
     clippy::too_many_arguments,
     reason = "Stage 8 takes the shared formula dimensions, trusted-advice commitment, and the two upstream stage outputs it batches; bundling them would add indirection."
 )]
-#[cfg(not(feature = "akita"))]
 #[jolt_verifier_derive::fs_scope(Stage8)]
 pub fn verify<F, PCS, VC, T, ZkProof>(
     checked: &CheckedInputs,
@@ -257,7 +245,6 @@ where
     clippy::too_many_arguments,
     reason = "gathers per-polynomial sources from several stages"
 )]
-#[cfg(not(feature = "akita"))]
 /// Assemble the final-opening batch entries in `final_opening_polynomial_order`,
 /// pairing each polynomial's commitment with its opening claim (clear mode) and
 /// its Lagrange embedding scale. Public because the prover's stage-8 recipe
@@ -442,7 +429,6 @@ where
     Ok(entries)
 }
 
-#[cfg(not(feature = "akita"))]
 fn require_commitment_layout<C>(
     commitments: &JoltCommitments<C>,
     layout: JoltRaPolynomialLayout,
@@ -480,57 +466,4 @@ fn require_commitment_layout<C>(
         });
     }
     Ok(())
-}
-
-#[cfg(feature = "akita")]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "same signature as the homomorphic build's verify"
-)]
-#[jolt_verifier_derive::fs_scope(Stage8)]
-pub fn verify<F, PCS, VC, T, ZkProof>(
-    checked: &CheckedInputs,
-    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
-    proof: &JoltProof<PCS, VC, ZkProof>,
-    formula_dimensions: &JoltFormulaDimensions,
-    trusted_advice_commitment: Option<&PCS::Output>,
-    transcript: &mut T,
-    stage6: &Stage6bOutput<F, VC::Output>,
-    stage7: &Stage7Output<F, VC::Output>,
-) -> Result<Stage8Output<F, PCS::Output, VC::Output>, VerifierError>
-where
-    F: JoltField,
-    PCS: CommitmentScheme<Field = F>,
-    PCS::Output: Clone + AppendToTranscript + super::OneHotTraceCommitmentMetadata,
-    PCS::VerifierSetup: super::OneHotTraceSetupMetadata,
-    VC: VectorCommitment<Field = F>,
-    T: Transcript<Challenge = F>,
-{
-    // The reconstruction phase settles auxiliary word/chunk claims against
-    // their committed one-hot decompositions.
-    let reconstruction = super::reconstruction::verify(
-        checked,
-        proof.stages.reconstruction_sumcheck_proof.as_ref(),
-        &proof.clear_claims()?.reconstruction,
-        transcript,
-        stage6.clear()?,
-        stage7.clear()?,
-    )?;
-
-    // OneHotTrace then opens natively at its shared point; reconstruction leaves are
-    // discharged by separate auxiliary packed openings.
-    super::packed::verify(
-        formula_dimensions,
-        proof.one_hot_config,
-        preprocessing,
-        &proof.commitments,
-        proof.untrusted_advice_commitment.as_ref(),
-        trusted_advice_commitment,
-        &proof.joint_opening_proof,
-        transcript,
-        stage7.clear()?,
-        &reconstruction,
-    )?;
-
-    Ok(Stage8Output::Clear)
 }

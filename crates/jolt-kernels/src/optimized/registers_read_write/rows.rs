@@ -38,11 +38,15 @@ impl WitnessBundle for RegisterCycleRow {
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
         let cycle = Self {
-            rs1: row.rs1_index().map(|register| (register, row.rs1_value())),
-            rs2: row.rs2_index().map(|register| (register, row.rs2_value())),
+            rs1: row
+                .rs1_index()
+                .map(|register| (register.id(), row.rs1_value())),
+            rs2: row
+                .rs2_index()
+                .map(|register| (register.id(), row.rs2_value())),
             rd: row
                 .rd_index()
-                .map(|register| (register, row.rd_pre_value(), row.rd_write_value())),
+                .map(|register| (register.id(), row.rd_pre_value(), row.rd_write_value())),
         };
         for register in [
             cycle.rs1.map(|(register, _)| register),
@@ -281,17 +285,7 @@ impl RegisterCycleRow {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "test module")]
 mod tests {
-    use common::jolt_device::MemoryLayout;
-    use jolt_program::preprocess::{
-        BytecodePreprocessing, JoltProgramPreprocessing, RAMPreprocessing,
-    };
-    use jolt_riscv::{
-        CapturedState, JoltInstructionKind, JoltInstructionRow, JoltTraceRow, NonMemoryState,
-        NormalizedOperands,
-    };
-
     use super::*;
 
     /// The counting pass and the write pass must agree on every operand
@@ -319,37 +313,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn rejects_register_outside_protocol_domain() {
-        let instruction = JoltInstructionRow {
-            instruction_kind: JoltInstructionKind::ADDI,
-            operands: NormalizedOperands {
-                rs1: Some(200),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let row = JoltTraceRow::from_components(
-            CapturedState::NonMemory(NonMemoryState::default()),
-            &instruction,
-            0,
-        )
-        .unwrap();
-        let preprocessing = JoltProgramPreprocessing {
-            bytecode: BytecodePreprocessing::default(),
-            ram: RAMPreprocessing::default(),
-            memory_layout: MemoryLayout::default(),
-            max_padded_trace_length: 1,
-        };
-        let env = WitnessEnv::new(&preprocessing);
-
-        let error = RegisterCycleRow::from_row(&row, None, &env).unwrap_err();
-        assert!(matches!(
-            error,
-            WitnessError::InvalidWitnessData { reason, .. }
-                if reason.contains("register index 200")
-        ));
     }
 }

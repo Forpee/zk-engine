@@ -29,6 +29,11 @@ pub enum ProverError<F: JoltField> {
     #[error("unsupported: {reason}")]
     Unsupported { reason: &'static str },
 
+    /// Executing the program (or materializing its records as proof rows)
+    /// failed before proving started.
+    #[error("execution failed: {reason}")]
+    Execution { reason: String },
+
     /// A cross-stage carry or kernel contract the prover itself must uphold
     /// was violated — a prover bug, never a capability gap, so never worth
     /// retrying with different inputs or another backend.

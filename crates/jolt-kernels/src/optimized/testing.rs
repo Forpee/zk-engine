@@ -1,11 +1,11 @@
 //! Synthetic-trace fixtures and the reference/optimized lockstep parity
-//! harness shared by the optimized RAM kernel tests.
+//! harness shared by the optimized kernel tests.
 //!
-//! The fixture replays a small RAM op script into a real [`TraceBackend`]
-//! (state-consistent pre/post values, a tiny synthetic memory layout, and
-//! the guest-style trailing termination write that keeps `RamValFinal`
-//! consistent with the initial state on untouched words — the invariant the
-//! optimized kernels' `val_init` reconstruction relies on).
+//! [`TraceBuilder`] assembles a hand-built [`IrProgram`] and its records in
+//! lockstep — every row's register reads come from a running register file
+//! and every RAM access from a running memory, so the rows satisfy the
+//! record contracts by construction — and [`with_trace_plane`] replays them
+//! into a real [`TraceBackend`].
 
 #![expect(
     clippy::unwrap_used,
@@ -13,36 +13,39 @@
     reason = "test support module: fail loudly"
 )]
 
-use common::jolt_device::{JoltDevice, MemoryLayout};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use jolt_claims::protocols::jolt::{JoltChallengeId, JoltOneHotConfig};
 use jolt_claims::{InputClaims, OutputClaims, SumcheckChallenges};
 use jolt_field::{Field, Fr, Ring};
 use jolt_poly::UnivariatePoly;
-use jolt_program::execution::{
-    JoltProgram, OwnedTrace, RamAccess, RamRead, RamWrite, RegisterRead, RegisterState,
-    RegisterWrite, TraceOutput, TraceRow,
-};
-use jolt_program::preprocess::{BytecodePreprocessing, JoltProgramPreprocessing, RAMPreprocessing};
-use jolt_riscv::{JoltInstructionKind, JoltInstructionRow, NormalizedOperands, RV64IMAC_JOLT};
 use jolt_verifier::stages::relations::{
     ConcreteSumcheck, ConcreteSumcheckChallenges, SumcheckInputClaims, SumcheckOutputClaims,
+};
+use jolt_wasm_backend::{RamAccess, RamRead, RamWrite, Record, RegisterRead, RegisterWrite};
+use jolt_wasm_ir::layout::{RAM_BASE, WORD_BYTES};
+use jolt_wasm_ir::row::RowModel;
+use jolt_wasm_ir::{
+    AluOp, Ir, IrFunction, IrProgram, MemoryLimits, Operand, Pc, Reg, Width, REGISTER_COUNT,
+};
+use jolt_wasm_program::{
+    build_trace_rows, MemoryWord, PublicIo, WasmBytecode, WasmProgramPreprocessing,
 };
 use jolt_witness::{JoltVmWitnessConfig, JoltVmWitnessInputs, JoltWitnessPlane, TraceBackend};
 use rand_core::SeedableRng;
 
 use crate::{ProverInputs, SumcheckKernel};
 
-/// Word addresses below this index are reserved for the layout's panic (0)
-/// and termination (1) words; scripts should use words `>= 2`.
-pub(crate) const TERMINATION_WORD: u64 = 1;
+/// The fixture's word `w` lives at this guest address; the RAM argument's
+/// dense index of that word is `w`.
+pub(crate) fn word_address(word: u64) -> u64 {
+    RAM_BASE + WORD_BYTES * word
+}
 
-/// The fixture's word 0 lives at this byte address (the layout's lowest).
-const BASE_ADDRESS: u64 = 0x1000;
-
-/// The fixture layout's lowest mapped address (word 0), as the RAF
-/// relation's `lowest_address` expects it.
+/// The lowest RAM address the RAF relation's unmap constant expects.
 pub(crate) fn fixture_lowest_address() -> u64 {
-    BASE_ADDRESS
+    RAM_BASE
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -67,8 +70,241 @@ pub(crate) enum RamOp {
     None,
 }
 
-/// Run `f` against a trace backend replaying `ops` (plus the trailing
-/// termination write), padded to `2^log_t` cycles.
+/// A program and its records, built one row at a time. The code starts with
+/// the `Halt` trampoline at pc 0; a trace whose pc chain must end on the
+/// padding row closes with [`jump`](Self::jump)`(0)`.
+pub(crate) struct TraceBuilder {
+    code: Vec<Ir>,
+    records: Vec<Record>,
+    regs: [u64; REGISTER_COUNT],
+    ram: BTreeMap<u64, u64>,
+    program_memory: Vec<MemoryWord>,
+}
+
+impl TraceBuilder {
+    pub(crate) fn new() -> Self {
+        Self {
+            code: vec![Ir::Halt],
+            records: Vec::new(),
+            regs: [0; REGISTER_COUNT],
+            ram: BTreeMap::new(),
+            program_memory: Vec::new(),
+        }
+    }
+
+    /// Seed a nonzero initial RAM word (part of the program memory image).
+    pub(crate) fn initial_word(&mut self, address: u64, value: u64) {
+        let _ = self.ram.insert(address, value);
+        self.program_memory.push(MemoryWord { address, value });
+    }
+
+    /// Set a register without a row (the fixture's "value already held").
+    pub(crate) fn set_register(&mut self, register: Reg, value: u64) {
+        self.regs[register.id() as usize] = value;
+    }
+
+    fn pc(&self) -> Pc {
+        self.code.len() as Pc
+    }
+
+    /// Append `ir` at the next pc with reads off the running register file;
+    /// `rd_post` is the written value (applied to the file), `ram` the row's
+    /// access, `next_pc` the successor.
+    fn push(&mut self, ir: Ir, rd_post: u64, ram: RamAccess, next_pc: Pc) {
+        let pc = self.pc();
+        let spec = ir.row_spec();
+        let read = |register: Reg| RegisterRead {
+            register,
+            value: self.regs[register.id() as usize],
+        };
+        let rs1 = spec.rs1.map(read);
+        let rs2 = spec.rs2.map(read);
+        let rd = spec.rd.map(|register| RegisterWrite {
+            register,
+            pre_value: self.regs[register.id() as usize],
+            post_value: rd_post,
+        });
+        if let Some(write) = rd {
+            self.regs[write.register.id() as usize] = write.post_value;
+        }
+        self.code.push(ir);
+        self.records.push(Record {
+            pc,
+            next_pc,
+            instruction: ir,
+            rs1,
+            rs2,
+            rd,
+            ram,
+        });
+    }
+
+    pub(crate) fn nop(&mut self) {
+        let next = self.pc() + 1;
+        self.push(Ir::Nop, 0, RamAccess::NoOp, next);
+    }
+
+    /// `rd = mem[address]`.
+    pub(crate) fn load(&mut self, rd: Reg, address: u64) {
+        let value = self.ram.get(&address).copied().unwrap_or(0);
+        let next = self.pc() + 1;
+        self.push(
+            Ir::Load {
+                rd,
+                base: Reg::ZERO,
+                offset: address as i64,
+            },
+            value,
+            RamAccess::Read(RamRead { address, value }),
+            next,
+        );
+    }
+
+    /// `mem[address] = value`, the value staged in `T0`.
+    pub(crate) fn store(&mut self, address: u64, value: u64) {
+        self.set_register(Reg::T0, value);
+        let pre_value = self.ram.insert(address, value).unwrap_or(0);
+        let next = self.pc() + 1;
+        self.push(
+            Ir::Store {
+                base: Reg::ZERO,
+                value: Reg::T0,
+                offset: address as i64,
+            },
+            0,
+            RamAccess::Write(RamWrite {
+                address,
+                pre_value,
+                post_value: value,
+            }),
+            next,
+        );
+    }
+
+    /// A register-only row touching the given operands: an `Add` writing
+    /// `post` to `rd`, or (without `rd`) an equality `Branch` to the halt
+    /// row reading both. Absent read operands read `ZERO`.
+    pub(crate) fn register_op(
+        &mut self,
+        rd: Option<Reg>,
+        rs1: Option<Reg>,
+        rs2: Option<Reg>,
+        post: u64,
+    ) {
+        let fallthrough = self.pc() + 1;
+        let rs1 = rs1.unwrap_or(Reg::ZERO);
+        let (ir, next) = if let Some(rd) = rd {
+            (
+                Ir::Alu {
+                    op: AluOp::Add(Width::W64),
+                    rd,
+                    rs1,
+                    rs2: rs2.map_or(Operand::Imm(3), Operand::Reg),
+                },
+                fallthrough,
+            )
+        } else {
+            let rs2 = rs2.unwrap_or(Reg::ZERO);
+            let taken = self.regs[rs1.id() as usize] == self.regs[rs2.id() as usize];
+            (
+                Ir::Branch {
+                    op: AluOp::Eq,
+                    rs1,
+                    rs2,
+                    target: 0,
+                },
+                if taken { 0 } else { fallthrough },
+            )
+        };
+        self.push(ir, post, RamAccess::NoOp, next);
+    }
+
+    pub(crate) fn jump(&mut self, target: Pc) {
+        self.push(Ir::Jump { target }, 0, RamAccess::NoOp, target);
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Package the program, its preprocessing, and the proof rows.
+    pub(crate) fn finish(self, max_trace_length: usize) -> BuiltTrace {
+        let mut exports = BTreeMap::new();
+        let _ = exports.insert("main".to_owned(), 0);
+        let mut entries = BTreeMap::new();
+        let _ = entries.insert("main".to_owned(), 1);
+        let program = IrProgram {
+            code: self.code,
+            functions: vec![IrFunction {
+                entry: 1,
+                params: 0,
+                results: 0,
+                frame_slots: 0,
+            }],
+            exports,
+            entries,
+            memory: MemoryLimits {
+                initial_pages: 0,
+                max_pages: 0,
+            },
+            globals: Vec::new(),
+            data: Vec::new(),
+        };
+        let mut program_memory = self.program_memory;
+        program_memory.sort_by_key(|word| word.address);
+        let preprocessing = WasmProgramPreprocessing {
+            bytecode: WasmBytecode::preprocess(&program).unwrap(),
+            program_memory,
+            memory: program.memory,
+            max_trace_length,
+        };
+        let rows = build_trace_rows(&self.records).unwrap();
+        BuiltTrace {
+            preprocessing: Arc::new(preprocessing),
+            rows,
+        }
+    }
+}
+
+pub(crate) struct BuiltTrace {
+    pub preprocessing: Arc<WasmProgramPreprocessing>,
+    pub rows: Vec<jolt_wasm_program::WasmTraceRow>,
+}
+
+pub(crate) fn one_hot_config(log_k_chunk: u8) -> JoltOneHotConfig {
+    JoltOneHotConfig {
+        log_k_chunk,
+        lookups_ra_virtual_log_k_chunk: 16,
+    }
+}
+
+/// Run `f` against a trace backend over `trace`, padded to `2^log_t`
+/// cycles over a `ram_k`-word RAM domain, with `io` as the run's public I/O.
+pub(crate) fn with_trace_plane<R>(
+    log_t: usize,
+    ram_k: usize,
+    log_k_chunk: u8,
+    trace: BuiltTrace,
+    io: PublicIo,
+    f: impl FnOnce(&TraceBackend) -> R,
+) -> R {
+    assert!(trace.rows.len() <= 1 << log_t, "fixture overflows 2^log_t");
+    let config = JoltVmWitnessConfig::new(log_t, ram_k, one_hot_config(log_k_chunk));
+    let inputs = JoltVmWitnessInputs::new(&trace.preprocessing, Arc::new(trace.rows), io);
+    let backend = TraceBackend::new(config, inputs);
+    f(&backend)
+}
+
+pub(crate) fn empty_io() -> PublicIo {
+    PublicIo {
+        entry: "main".to_owned(),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    }
+}
+
+/// Run `f` against a trace backend replaying `ops` (plus the jump back to
+/// the halt row), padded to `2^log_t` cycles.
 pub(crate) fn with_ram_fixture<R>(
     shape: FixtureShape,
     ops: Vec<RamOp>,
@@ -78,15 +314,8 @@ pub(crate) fn with_ram_fixture<R>(
 }
 
 /// [`with_ram_fixture`] with nonzero initial RAM values: `init_words[i]`
-/// seeds word `2 + i` (the reserved panic/termination words stay zero). The
-/// values ride in as trusted-advice bytes, which the witness backend
-/// populates into BOTH the initial and the final RAM state — so untouched
-/// nonzero words keep `RamValFinal` consistent with `val_init` without a
-/// final-memory image. WARNING: the final-state advice populate also masks
-/// script WRITES to seeded words in `RamValFinal`; only the never-accessed
-/// fallback of the optimized `val_init` reconstruction reads those slots, so
-/// read-write parity is unaffected, but scripts feeding a val-final-anchored
-/// kernel must not write seeded words.
+/// seeds word `2 + i` of the program memory image, so untouched nonzero
+/// words keep `RamValFinal` consistent with `val_init`.
 pub(crate) fn with_ram_fixture_init<R>(
     shape: FixtureShape,
     init_words: Vec<u64>,
@@ -98,154 +327,22 @@ pub(crate) fn with_ram_fixture_init<R>(
         init_words.is_empty() || 2 + init_words.len() <= shape.ram_k,
         "init words exceed the RAM domain"
     );
-
-    let memory_layout = MemoryLayout {
-        trusted_advice_start: BASE_ADDRESS,
-        untrusted_advice_start: BASE_ADDRESS,
-        panic: BASE_ADDRESS,
-        termination: BASE_ADDRESS + 8 * TERMINATION_WORD,
-        ..Default::default()
-    };
-
-    let load = JoltInstructionRow {
-        instruction_kind: JoltInstructionKind::LD,
-        address: 0x8000_0000,
-        operands: NormalizedOperands {
-            rd: Some(1),
-            rs1: Some(2),
-            rs2: None,
-            imm: 3,
-        },
-        virtual_sequence_remaining: None,
-        is_first_in_sequence: false,
-        is_compressed: false,
-    };
-    let store = JoltInstructionRow {
-        instruction_kind: JoltInstructionKind::SD,
-        address: 0x8000_0004,
-        operands: NormalizedOperands {
-            rd: None,
-            rs1: Some(2),
-            rs2: Some(3),
-            imm: 0,
-        },
-        ..load
-    };
-    use std::sync::Arc;
-    let preprocessing = Arc::new(JoltProgramPreprocessing {
-        bytecode: BytecodePreprocessing::preprocess(
-            vec![load, store],
-            load.address as u64,
-            RV64IMAC_JOLT,
-        )
-        .unwrap(),
-        ram: RAMPreprocessing::default(),
-        memory_layout: memory_layout.clone(),
-        max_padded_trace_length: 1 << shape.log_t,
-    });
-    let program = Arc::new(JoltProgram::default());
-
-    let mut state = vec![0u64; shape.ram_k];
-    let trusted_advice: Vec<u8> = if init_words.is_empty() {
-        Vec::new()
-    } else {
-        // Two zero words keep the reserved panic/termination words zero in
-        // the advice populate.
-        let mut bytes = vec![0u8; 16];
-        for (i, &value) in init_words.iter().enumerate() {
-            state[2 + i] = value;
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        bytes
-    };
-    let mut script = ops;
-    if shape.ram_k > TERMINATION_WORD as usize {
-        script.push(RamOp::Write {
-            word: TERMINATION_WORD,
-            post: 1,
-        });
+    let mut builder = TraceBuilder::new();
+    for (i, &value) in init_words.iter().enumerate() {
+        builder.initial_word(word_address(2 + i as u64), value);
     }
-    let mut rd_value = 0;
-    let rows: Vec<TraceRow> = script
-        .into_iter()
-        .map(|op| {
-            let (instruction, registers, ram_access) = match op {
-                RamOp::Read { word } => {
-                    let address = BASE_ADDRESS + 8 * word;
-                    let value = state[word as usize];
-                    let registers = RegisterState {
-                        rs1: Some(RegisterRead {
-                            register: 2,
-                            value: address,
-                        }),
-                        rd: Some(RegisterWrite {
-                            register: 1,
-                            pre_value: rd_value,
-                            post_value: value,
-                        }),
-                        ..Default::default()
-                    };
-                    rd_value = value;
-                    (load, registers, RamAccess::Read(RamRead { address, value }))
-                }
-                RamOp::Write { word, post } => {
-                    let address = BASE_ADDRESS + 8 * word;
-                    let pre_value = state[word as usize];
-                    state[word as usize] = post;
-                    (
-                        store,
-                        RegisterState {
-                            rs1: Some(RegisterRead {
-                                register: 2,
-                                value: address,
-                            }),
-                            rs2: Some(RegisterRead {
-                                register: 3,
-                                value: post,
-                            }),
-                            ..Default::default()
-                        },
-                        RamAccess::Write(RamWrite {
-                            address,
-                            pre_value,
-                            post_value: post,
-                        }),
-                    )
-                }
-                RamOp::None => (
-                    JoltInstructionRow::default(),
-                    RegisterState::default(),
-                    RamAccess::NoOp,
-                ),
-            };
-            TraceRow {
-                instruction,
-                registers,
-                ram_access,
-            }
-        })
-        .collect();
-
-    let device = JoltDevice {
-        memory_layout,
-        trusted_advice,
-        ..Default::default()
-    };
-    let config = JoltVmWitnessConfig::new(
-        shape.log_t,
-        shape.ram_k,
-        JoltOneHotConfig {
-            log_k_chunk: 4,
-            lookups_ra_virtual_log_k_chunk: 16,
-        },
-    );
-    let inputs = JoltVmWitnessInputs::new(
-        &program,
-        &preprocessing,
-        TraceOutput::new(OwnedTrace::new(rows), device, None, None),
-    );
-    let backend = TraceBackend::new(config, inputs);
-    f(&backend)
+    for op in ops {
+        match op {
+            RamOp::Read { word } => builder.load(Reg::T1, word_address(word)),
+            RamOp::Write { word, post } => builder.store(word_address(word), post),
+            RamOp::None => builder.nop(),
+        }
+    }
+    builder.jump(0);
+    let trace = builder.finish(1 << shape.log_t);
+    with_trace_plane(shape.log_t, shape.ram_k, 4, trace, empty_io(), |backend| {
+        f(backend)
+    })
 }
 
 /// Deterministic scalars for fixture points and challenges.

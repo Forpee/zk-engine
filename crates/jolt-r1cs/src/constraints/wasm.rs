@@ -4,12 +4,11 @@
 //! (`jolt-wasm-program`'s `WasmTraceRow` columns and `jolt-wasm-backend`'s
 //! `RowFlags`): the constraint-form `check_record` of `jolt-wasm-backend`
 //! transcribed into `guard · (left − right) = 0` and `left · right = output`
-//! rows. Differences from [`super::rv64`]: absolute branch/jump targets (a
-//! branch's `imm` is its target pc), no link-register write on jumps, no
-//! expanded/unexpanded pc or virtual sequences, a `Halt` row class holding
-//! the pc (the padding row), register-or-immediate right operands on every
-//! lookup row, no pc-relative operand, and the instruction-input selection
-//! constrained here rather than by a separate sumcheck.
+//! rows. Branch/jump targets are absolute (a branch's `imm` is its
+//! target pc), jumps write no link register, a `Halt` row class holds the pc
+//! (the padding row), every lookup row takes a register-or-immediate right
+//! operand, and the instruction-input selection is constrained here rather
+//! than by a separate sumcheck.
 //!
 //! # Variable layout
 //!
@@ -23,7 +22,7 @@
 
 use jolt_field::Field;
 
-use super::rv64::{row, row_wide};
+use super::{row, row_wide};
 use crate::constraint::SparseRow;
 
 pub const V_CONST: usize = 0;

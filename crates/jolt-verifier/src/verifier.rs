@@ -2,21 +2,16 @@
 
 use jolt_claims::protocols::jolt::JoltRelationId;
 use jolt_claims::protocols::jolt::{JoltOneHotConfig, JoltReadWriteConfig};
-#[cfg(not(feature = "akita"))]
 use jolt_crypto::HomomorphicCommitment;
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
 use jolt_openings::CommitmentScheme;
-#[cfg(not(feature = "akita"))]
 use jolt_openings::{AdditivelyHomomorphic, ZkOpeningScheme};
 use jolt_sumcheck::SumcheckProof;
-#[cfg(feature = "akita")]
-use jolt_transcript::append_length_prefixed;
 use jolt_transcript::{AppendToTranscript, Label, LabelWithCount, Transcript, U64Word};
 use jolt_wasm_ir::layout::{MAX_INPUT_WORDS, MAX_OUTPUT_WORDS};
 use jolt_wasm_program::{max_ram_k, min_ram_k, PublicIo};
 
-#[cfg(not(feature = "akita"))]
 use crate::proof::JoltCommitments;
 use crate::{
     config::{
@@ -33,7 +28,6 @@ use crate::{
     VerifierError,
 };
 
-#[cfg(not(feature = "akita"))]
 pub fn verify<F, PCS, VC, T>(
     preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     public_io: &PublicIo,
@@ -162,113 +156,6 @@ where
     }
 
     let stage8::Stage8Output::Clear(_) = stage8 else {
-        return Err(VerifierError::ExpectedClearProof { field: "stage8" });
-    };
-
-    Ok(())
-}
-
-/// The Akita verification path: the same stage spine, with the reconstruction
-/// phase producing auxiliary leaves, a random-selector opening of the
-/// prefix-packed OneHotTrace polynomial, and separate packed openings for
-/// auxiliary objects in place of the homomorphic RLC batch. No homomorphism
-/// bounds and no ZK tail.
-#[cfg(feature = "akita")]
-pub fn verify<F, PCS, VC, T>(
-    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
-    public_io: &PublicIo,
-    proof: &JoltProof<PCS, VC>,
-    trusted_advice_commitment: Option<&PCS::Output>,
-) -> Result<(), VerifierError>
-where
-    F: JoltField + AppendToTranscript,
-    PCS: CommitmentScheme<Field = F>,
-    PCS::Output: Clone + AppendToTranscript + stage8::OneHotTraceCommitmentMetadata,
-    PCS::VerifierSetup: stage8::OneHotTraceSetupMetadata,
-    VC: VectorCommitment<Field = F>,
-    VC::Output: Copy + AppendToTranscript,
-    T: Transcript<Challenge = F>,
-{
-    let (checked, mut transcript) = validate_and_seed_transcript::<PCS, VC, T, _>(
-        preprocessing,
-        public_io,
-        proof,
-        trusted_advice_commitment,
-    )?;
-
-    // Built once for the whole verification and shared by the stages that read
-    // the RA layout (5-8), instead of each rebuilding the same dimensions.
-    let formula_dimensions = crate::stages::build_formula_dimensions(
-        proof,
-        preprocessing,
-        &checked,
-        num::ilog2(checked.trace_length),
-        JoltRelationId::InstructionReadRaf,
-    )?;
-
-    let stage1 = stage1::verify(&checked, proof, &mut transcript)?;
-    let stage2 = stage2::verify(&checked, proof, &mut transcript, &stage1)?;
-    let stage3 = stage3::verify(&checked, proof, &mut transcript, &stage1, &stage2)?;
-    let stage4 = stage4::verify(
-        &checked,
-        preprocessing,
-        proof,
-        &mut transcript,
-        &stage2,
-        &stage3,
-    )?;
-    let stage5 = stage5::verify(
-        &checked,
-        proof,
-        &formula_dimensions,
-        &mut transcript,
-        &stage2,
-        &stage4,
-    )?;
-    let stage6a = stage6a::verify(
-        &checked,
-        proof,
-        &formula_dimensions,
-        &mut transcript,
-        &stage1,
-        &stage2,
-        &stage3,
-        &stage4,
-        &stage5,
-    )?;
-    let stage6b = stage6b::verify(
-        &checked,
-        preprocessing,
-        proof,
-        &formula_dimensions,
-        &mut transcript,
-        &stage1,
-        &stage2,
-        &stage3,
-        &stage4,
-        &stage5,
-        &stage6a,
-    )?;
-    let stage7 = stage7::verify(
-        &checked,
-        proof,
-        &formula_dimensions,
-        &mut transcript,
-        &stage4,
-        &stage6b,
-    )?;
-    let stage8 = stage8::verify(
-        &checked,
-        preprocessing,
-        proof,
-        &formula_dimensions,
-        trusted_advice_commitment,
-        &mut transcript,
-        &stage6b,
-        &stage7,
-    )?;
-
-    let stage8::Stage8Output::Clear = stage8 else {
         return Err(VerifierError::ExpectedClearProof { field: "stage8" });
     };
 
@@ -410,10 +297,6 @@ where
     for (stage_proof, field) in stage_proofs {
         validate_sumcheck_representation(stage_proof, field, zk)?;
     }
-    #[cfg(feature = "akita")]
-    if let Some(reconstruction) = proof.stages.reconstruction_sumcheck_proof.as_ref() {
-        validate_sumcheck_representation(reconstruction, "reconstruction_sumcheck_proof", zk)?;
-    }
 
     match (&proof.claims, zk) {
         (crate::proof::JoltProofClaims::Clear(_), false)
@@ -535,7 +418,6 @@ pub(crate) fn absorb_commitments<PCS, VC, ZkProof, T>(
     VC: VectorCommitment<Field = PCS::Field>,
     T: Transcript<Challenge = PCS::Field>,
 {
-    #[cfg(not(feature = "akita"))]
     {
         absorb_transcript_commitments(
             &proof.commitments,
@@ -550,53 +432,6 @@ pub(crate) fn absorb_commitments<PCS, VC, ZkProof, T>(
                 transcript,
             );
         }
-    }
-    #[cfg(feature = "akita")]
-    absorb_packed_commitments(
-        &proof.commitments,
-        proof.untrusted_advice_commitment.as_ref(),
-        trusted_advice_commitment,
-        preprocessing
-            .program
-            .committed()
-            .map_or(&[][..], |committed| &committed.program_one_hot_commitments),
-        transcript,
-    );
-}
-
-/// Absorbs the packed commitment objects in canonical object order:
-/// `OneHotTrace`, untrusted advice, trusted advice, the `ProgramOneHot`
-/// objects (bytecode, then program image). Shared verbatim by the packed
-/// prover's stage 0.
-#[cfg(feature = "akita")]
-pub fn absorb_packed_commitments<C, T>(
-    one_hot_trace: &C,
-    untrusted_advice_commitment: Option<&C>,
-    trusted_advice_commitment: Option<&C>,
-    program_one_hot_commitments: &[C],
-    transcript: &mut T,
-) where
-    C: AppendToTranscript,
-    T: Transcript,
-{
-    append_length_prefixed(transcript, b"commitment", one_hot_trace);
-    if let Some(commitment) = untrusted_advice_commitment {
-        append_length_prefixed(transcript, b"untrusted_advice", commitment);
-    }
-    if let Some(commitment) = trusted_advice_commitment {
-        append_length_prefixed(transcript, b"trusted_advice", commitment);
-    }
-    absorb_packed_program_commitments(program_one_hot_commitments, transcript);
-}
-
-#[cfg(feature = "akita")]
-pub fn absorb_packed_program_commitments<C, T>(commitments: &[C], transcript: &mut T)
-where
-    C: AppendToTranscript,
-    T: Transcript,
-{
-    for commitment in commitments {
-        append_length_prefixed(transcript, b"program_one_hot_commitment", commitment);
     }
 }
 
@@ -628,7 +463,6 @@ pub fn absorb_committed_program_commitments<C, T>(
 /// this covers only the commitments carried by the proof itself; committed
 /// program-image commitments live in the preprocessing and are absorbed
 /// separately by [`absorb_commitments`] immediately after this call.
-#[cfg(not(feature = "akita"))]
 pub fn absorb_transcript_commitments<C, T>(
     commitments: &JoltCommitments<C>,
     untrusted_advice_commitment: Option<&C>,
@@ -1081,7 +915,6 @@ mod tests {
     /// A zk proof cannot exist on the akita build (`zk` and `akita` are
     /// mutually exclusive), so the accept case is base-only; the reject cases
     /// below run on both builds.
-    #[cfg(not(feature = "akita"))]
     #[test]
     fn accepts_zk_proof_consistency() {
         let proof = proof_with_zk(true, zk_claims());
@@ -1225,15 +1058,9 @@ mod tests {
     fn proof_with_zk(is_zk: bool, claims: TestClaims) -> TestProof {
         JoltProof {
             protocol: crate::config::JoltProtocolConfig::for_zk(claims.is_zk()),
-            #[cfg(not(feature = "akita"))]
             commitments: test_commitments(),
-            #[cfg(feature = "akita")]
-            commitments: TestCommitment,
             stages: stage_proofs(is_zk),
-            #[cfg(not(feature = "akita"))]
             joint_opening_proof: (),
-            #[cfg(feature = "akita")]
-            joint_opening_proof: crate::proof::AkitaJointOpeningProof::new((), Vec::new()),
             untrusted_advice_commitment: None,
             claims,
             trace_length: 1,
@@ -1252,7 +1079,6 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "akita"))]
     fn test_commitments() -> crate::proof::JoltCommitments<TestCommitment> {
         crate::proof::JoltCommitments::new(
             TestCommitment,
@@ -1270,13 +1096,6 @@ mod tests {
             stage1: stage1::outputs::Stage1OutputClaims {
                 uniskip_output_claim: zero,
                 outer: empty_spartan_outer_claims(),
-            },
-            #[cfg(feature = "akita")]
-            reconstruction: crate::stages::stage8::reconstruction::ReconstructionOutputClaims {
-                untrusted_advice: None,
-                trusted_advice: None,
-                bytecode: None,
-                program_image: None,
             },
             stage2: stage2::outputs::Stage2OutputClaims {
                 product_uniskip_output_claim: zero,
@@ -1362,31 +1181,14 @@ mod tests {
                 },
             },
             stage6b: stage6b::outputs::Stage6bOutputClaims {
-                #[cfg(not(feature = "akita"))]
                 bytecode_read_raf: stage6b::outputs::BytecodeReadRafOutputClaims {
                     bytecode_ra: Vec::new(),
                 },
-                #[cfg(feature = "akita")]
-                bytecode_read_raf:
-                    stage6b::bytecode_read_raf::LatticeBytecodeReadRafOutputClaims {
-                        bytecode_ra: Vec::new(),
-                        fused_inc: zero,
-                    },
-                #[cfg(not(feature = "akita"))]
                 booleanity: stage6b::outputs::BooleanityOutputClaims {
                     instruction_ra: Vec::new(),
                     bytecode_ra: Vec::new(),
                     ram_ra: Vec::new(),
                 },
-                #[cfg(feature = "akita")]
-                booleanity:
-                    jolt_claims::protocols::jolt::lattice::relations::booleanity::LatticeBooleanityOutputClaims {
-                        instruction_ra: Vec::new(),
-                        bytecode_ra: Vec::new(),
-                        ram_ra: Vec::new(),
-                        balanced_inc_digits: Vec::new(),
-                        balanced_inc_carry: zero,
-                    },
                 ram_hamming_booleanity: stage6b::outputs::RamHammingBooleanityOutputClaims {
                     ram_hamming_weight: zero,
                 },
@@ -1397,7 +1199,6 @@ mod tests {
                     stage6b::outputs::InstructionRaVirtualizationOutputClaims {
                         committed_instruction_ra: Vec::new(),
                     },
-                #[cfg(not(feature = "akita"))]
                 inc_claim_reduction: stage6b::outputs::IncClaimReductionOutputClaims {
                     ram_inc: zero,
                     rd_inc: zero,
@@ -1413,10 +1214,6 @@ mod tests {
                         instruction_ra: Vec::new(),
                         bytecode_ra: Vec::new(),
                         ram_ra: Vec::new(),
-                        #[cfg(feature = "akita")]
-                        balanced_inc_digits: Vec::new(),
-                        #[cfg(feature = "akita")]
-                        balanced_inc_carry: zero,
                     },
                 trusted_advice: None,
                 untrusted_advice: None,
@@ -1514,8 +1311,6 @@ mod tests {
             stage6a_sumcheck_proof: sumcheck_proof(is_zk),
             stage6b_sumcheck_proof: sumcheck_proof(is_zk),
             stage7_sumcheck_proof: sumcheck_proof(is_zk),
-            #[cfg(feature = "akita")]
-            reconstruction_sumcheck_proof: None,
         }
     }
 
@@ -1537,7 +1332,7 @@ mod tests {
 
     /// The smallest RAM domain holding the public I/O window of the test
     /// program (no program image): `min_ram_k` of an empty image.
-    const TEST_RAM_K: usize = 1 << 18;
+    const TEST_RAM_K: usize = 1 << 11;
 
     fn test_public_io() -> PublicIo {
         PublicIo {

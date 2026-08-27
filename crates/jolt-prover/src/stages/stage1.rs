@@ -84,7 +84,7 @@ where
     // The generated stage drivers, on the verifier's own batch type.
     let sumchecks = Stage1BatchSumchecks {
         outer_remainder: OuterRemainder::new(
-            SpartanOuterDimensions::rv64(log_t),
+            SpartanOuterDimensions::wasm(log_t),
             tau,
             uniskip_challenge,
         ),

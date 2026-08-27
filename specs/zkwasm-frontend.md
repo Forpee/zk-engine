@@ -21,8 +21,9 @@ first slices: four crates — `jolt-wasm-ir` (the shared IR contract),
 `jolt-wasm-tables` (the WebAssembly lookup-table catalog, realizing every IR
 ALU op as a prefix–suffix-decomposable Jolt table), and `jolt-wasm-program`
 (proof-side preprocessing: the committed bytecode table, the initial memory
-image, and the compact proof-facing trace row). RISC-V crates remain in the tree only
-until the prover is re-pointed at these records; they are not to be extended.
+image, and the compact proof-facing trace row). The modular prover/verifier (`jolt-claims`, `jolt-witness`, `jolt-verifier`,
+`jolt-kernels`, `jolt-prover`) speak this row model natively; the RISC-V
+crates are gone.
 
 ## Intent
 
@@ -62,13 +63,14 @@ frontend and backend share only the IR crate:
   and `i64` values as-is; every `W32` op produces a zero-extended result. This
   keeps `i64.extend_i32_u` a `Move` and makes linear-memory addressing
   (`LINEAR_MEMORY_BASE + addr + offset`) overflow-free in `u64`.
-- **One address space, inside Jolt's RAM window.** Shadow stack
-  (`0x9000_0000`), globals (`0xA000_0000`, 8 bytes each), system words
-  (`0xB000_0000`: memory size, termination), public inputs (`0xB000_1000`),
-  public outputs (`0xB000_2000`), and linear memory (`0xC000_0000`) are
-  disjoint regions of one 64-bit guest address space, all at or above
-  `0x8000_0000` so no address translation is needed for the RAM argument; a
-  record's RAM address is always absolute. Shadow-stack exhaustion traps as
+- **One address space, inside Jolt's RAM window.** From `RAM_BASE`
+  (`0x9000_0000`) upward and contiguous: system words (memory size,
+  termination), public inputs, public outputs, the 1 MiB shadow stack plus
+  its guard page, globals (8 bytes each), and linear memory. The RAM
+  argument's word index is the dense `(address − RAM_BASE) / 8`
+  (`layout::remap_word_address`); a record's RAM address is always absolute.
+  System and I/O words sit at the bottom so a program that touches little
+  memory proves over a small RAM domain (`jolt-wasm-program::min_ram_k`). Shadow-stack exhaustion traps as
   `CallStackExhausted`.
 - **Program/IO model.** Public I/O is memory: the host writes the entry's
   arguments to the input words before execution and reads the results from
@@ -322,8 +324,8 @@ jolt-wasm-program     IrProgram ──preprocess──▶ WasmBytecode { [Byteco
 
 ## Documentation
 
-`CLAUDE.md` gains a `jolt-wasm` section; the book is updated when the prover
-is re-pointed.
+`CLAUDE.md` describes the WASM stack and its commands; the mdBook under
+`book/` still documents the RISC-V era and is pending a rewrite.
 
 ## References
 

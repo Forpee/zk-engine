@@ -28,14 +28,14 @@ use jolt_claims::protocols::jolt::{InstructionInputPublic, JoltDerivedId};
 use jolt_field::signed::{S192, S256, S64};
 use jolt_field::{Accumulator as _, JoltField, WithAccumulator};
 use jolt_poly::{BindingOrder, GruenSplitEqPolynomial, Polynomial, UnivariatePoly};
-use jolt_riscv::InstructionFlags;
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use jolt_utils::unsafe_allocate_zero_vec;
 use jolt_verifier::stages::relations::{
     ConcreteSumcheckChallenges, SumcheckInputClaims, SumcheckInputPoints, SumcheckOutputPoints,
 };
 use jolt_verifier::stages::stage3::outputs::InstructionInput;
-use jolt_witness::witnesses::{Imm, InstructionFlag, Rs1Value, Rs2Value, ToField, UnexpandedPc};
+use jolt_wasm_ir::RowFlag;
+use jolt_witness::witnesses::{Flag, Imm, Rs1Value, Rs2Value, ToField};
 use jolt_witness::{JoltWitnessPlane, WitnessBundle};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -45,24 +45,21 @@ use crate::{
     KernelError, PrepareKernel, ProofSession, ProverInputs, SumcheckKernel, SumcheckKernelError,
 };
 
-/// The eight operand/flag tables, in output-claim declaration order:
-/// `[is_rs1, rs1, is_pc, upc, is_rs2, rs2, is_imm, imm]`.
-const NUM_TABLES: usize = 8;
+/// The six operand/flag tables, in output-claim declaration order:
+/// `[is_rs1, rs1, is_rs2, rs2, is_imm, imm]`.
+const NUM_TABLES: usize = 6;
 
-/// One cycle's eight operand/flag values as native scalars.
+/// One cycle's six operand/flag values as native scalars.
 #[derive(Clone, Copy, Debug, WitnessBundle)]
 pub struct InstructionInputRow {
-    #[opening(InstructionFlags(InstructionFlags::LeftOperandIsRs1Value))]
-    pub is_rs1: InstructionFlag,
+    #[opening(RowFlag(RowFlag::LeftIsRs1))]
+    pub is_rs1: Flag,
     pub rs1_value: Rs1Value,
-    #[opening(InstructionFlags(InstructionFlags::LeftOperandIsPC))]
-    pub is_pc: InstructionFlag,
-    pub unexpanded_pc: UnexpandedPc,
-    #[opening(InstructionFlags(InstructionFlags::RightOperandIsRs2Value))]
-    pub is_rs2: InstructionFlag,
+    #[opening(RowFlag(RowFlag::RightIsRs2))]
+    pub is_rs2: Flag,
     pub rs2_value: Rs2Value,
-    #[opening(InstructionFlags(InstructionFlags::RightOperandIsImm))]
-    pub is_imm: InstructionFlag,
+    #[opening(RowFlag(RowFlag::RightIsImm))]
+    pub is_imm: Flag,
     pub imm: Imm,
 }
 
@@ -75,8 +72,6 @@ impl InstructionInputRow {
         [
             self.is_rs1.to_field(),
             self.rs1_value.to_field(),
-            self.is_pc.to_field(),
-            self.unexpanded_pc.to_field(),
             self.is_rs2.to_field(),
             self.rs2_value.to_field(),
             self.is_imm.to_field(),
@@ -105,7 +100,7 @@ impl<F: JoltField> PrepareKernel<F, InstructionInput<F>> for OptimizedInstructio
     }
 }
 
-/// The column state: native rows until the first bind, eight dense tables
+/// The column state: native rows until the first bind, six dense tables
 /// afterwards.
 #[cfg_attr(
     feature = "allocative",
@@ -188,11 +183,9 @@ impl<F: JoltField> OptimizedInstructionInputKernel<F> {
                 let even = &rows[2 * y];
                 let odd = &rows[2 * y + 1];
                 let (is_rs1, is_rs1_m) = ext_flag(even.is_rs1.0, odd.is_rs1.0);
-                let (is_pc, is_pc_m) = ext_flag(even.is_pc.0, odd.is_pc.0);
                 let (is_rs2, is_rs2_m) = ext_flag(even.is_rs2.0, odd.is_rs2.0);
                 let (is_imm, is_imm_m) = ext_flag(even.is_imm.0, odd.is_imm.0);
                 let (rs1, rs1_m) = ext_u64(even.rs1_value.0, odd.rs1_value.0);
-                let (upc, upc_m) = ext_u64(even.unexpanded_pc.0, odd.unexpanded_pc.0);
                 let (rs2, rs2_m) = ext_u64(even.rs2_value.0, odd.rs2_value.0);
                 let imm_even = S192::from_i128(even.imm.0);
                 let imm_odd = S192::from_i128(odd.imm.0);
@@ -200,11 +193,9 @@ impl<F: JoltField> OptimizedInstructionInputKernel<F> {
                     // Flag lanes stay tiny (|f(t)| ≤ 3); u64 lanes fit i128
                     // (|v(t)| < 2^67); products < 2^70.
                     let f_rs1 = is_rs1 + t * is_rs1_m;
-                    let f_pc = is_pc + t * is_pc_m;
                     let f_rs2 = is_rs2 + t * is_rs2_m;
                     let f_imm = is_imm + t * is_imm_m;
-                    let left = i128::from(f_rs1) * (rs1 + i128::from(t) * rs1_m)
-                        + i128::from(f_pc) * (upc + i128::from(t) * upc_m);
+                    let left = i128::from(f_rs1) * (rs1 + i128::from(t) * rs1_m);
                     // `f(t)·imm(t) = f(t)(1−t)·e₀ + f(t)t·e₁`: coefficients
                     // ≤ 12, so the products stay under 2^131 inside `S256`
                     // even for full-range `i128` immediates.
@@ -233,7 +224,7 @@ impl<F: JoltField> OptimizedInstructionInputKernel<F> {
         )
     }
 
-    /// The bound rounds' `q` evaluations over the eight dense tables.
+    /// The bound rounds' `q` evaluations over the six dense tables.
     fn dense_q_evals(&self, tables: &[Polynomial<F>]) -> [F; 4] {
         const POINTS: usize = 4;
         self.gruen.par_fold_out_in(
@@ -254,8 +245,8 @@ impl<F: JoltField> OptimizedInstructionInputKernel<F> {
                     *step = table[2 * row + 1] - lo;
                 }
                 for value in acc.iter_mut() {
-                    let right = evals[4] * evals[5] + evals[6] * evals[7];
-                    let left = evals[0] * evals[1] + evals[2] * evals[3];
+                    let right = evals[2] * evals[3] + evals[4] * evals[5];
+                    let left = evals[0] * evals[1];
                     *value += e_in * (right + self.gamma * left);
                     for (eval, step) in evals.iter_mut().zip(steps.iter()) {
                         *eval += *step;
@@ -278,7 +269,7 @@ impl<F: JoltField> OptimizedInstructionInputKernel<F> {
     }
 
     /// `s(t) = ℓ(t) · Σ_y E(y) · q(t, y)` at `t = 0..=3`, with
-    /// `q = (is_rs2·rs2 + is_imm·imm) + γ·(is_rs1·rs1 + is_pc·upc)`.
+    /// `q = (is_rs2·rs2 + is_imm·imm) + γ·(is_rs1·rs1)`.
     fn message(
         &self,
         round: usize,
@@ -297,7 +288,7 @@ impl<F: JoltField> OptimizedInstructionInputKernel<F> {
         self.gruen.bind(challenge);
         match &mut self.state {
             InputState::Native(rows) => {
-                // First bind: materialize the eight dense tables at `T/2` —
+                // First bind: materialize the six dense tables at `T/2` —
                 // the same `v₀ + r·(v₁ − v₀)` a dense-table bind computes.
                 let half = rows.len() / 2;
                 let materialize = |table: usize| -> Polynomial<F> {
@@ -329,7 +320,7 @@ impl<F: JoltField> OptimizedInstructionInputKernel<F> {
         self.progress.advance();
     }
 
-    /// The eight fully bound table values, table order.
+    /// The six fully bound table values, table order.
     fn final_values(&self) -> [F; NUM_TABLES] {
         match &self.state {
             // Bindless extraction happens only for `log_t = 0` geometries.
@@ -370,13 +361,11 @@ impl<F: JoltField> SumcheckKernel<F> for OptimizedInstructionInputKernel<F> {
         _inputs: &SumcheckInputClaims<F, Self::Relation>,
     ) -> Result<InstructionInputOutputClaims<F>, SumcheckKernelError<F>> {
         self.progress.require_complete()?;
-        let [left_operand_is_rs1, rs1_value, left_operand_is_pc, unexpanded_pc, right_operand_is_rs2, rs2_value, right_operand_is_imm, imm] =
+        let [left_operand_is_rs1, rs1_value, right_operand_is_rs2, rs2_value, right_operand_is_imm, imm] =
             self.final_values();
         Ok(InstructionInputOutputClaims {
             left_operand_is_rs1,
             rs1_value,
-            left_operand_is_pc,
-            unexpanded_pc,
             right_operand_is_rs2,
             rs2_value,
             right_operand_is_imm,
@@ -413,8 +402,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use jolt_claims::protocols::jolt::geometry::instruction::{
-        imm, left_operand_is_pc, left_operand_is_rs1, right_operand_is_imm, right_operand_is_rs2,
-        rs1_value, rs2_value, unexpanded_pc,
+        imm, left_operand_is_rs1, right_operand_is_imm, right_operand_is_rs2, rs1_value, rs2_value,
     };
     use jolt_claims::protocols::jolt::relations::instruction::{
         InstructionInputChallenges, InstructionInputInputClaims,
@@ -425,7 +413,7 @@ mod tests {
     use jolt_sumcheck::ProveRounds;
     use jolt_verifier::stages::relations::ConcreteSumcheck;
     use jolt_verifier::stages::stage3::outputs::InstructionInput;
-    use jolt_witness::witnesses::{Imm, InstructionFlag, Rs1Value, Rs2Value, UnexpandedPc};
+    use jolt_witness::witnesses::{Flag, Imm, Rs1Value, Rs2Value};
 
     use crate::reference::views::eq_table;
     use crate::{NaiveSumcheckProver, ProverInputs, SumcheckKernel};
@@ -458,18 +446,16 @@ mod tests {
                 let raw = splitmix(&mut state);
                 let wide = ((splitmix(&mut state) as i128) << 64) | splitmix(&mut state) as i128;
                 InstructionInputRow {
-                    is_rs1: InstructionFlag(raw & 1 != 0),
+                    is_rs1: Flag(raw & 1 != 0),
                     rs1_value: Rs1Value(splitmix(&mut state)),
-                    is_pc: InstructionFlag(raw & 2 != 0),
-                    unexpanded_pc: UnexpandedPc(splitmix(&mut state)),
-                    is_rs2: InstructionFlag(raw & 4 != 0),
+                    is_rs2: Flag(raw & 4 != 0),
                     rs2_value: Rs2Value(splitmix(&mut state)),
-                    is_imm: InstructionFlag(raw & 8 != 0),
+                    is_imm: Flag(raw & 8 != 0),
                     imm: Imm(if index % 3 == 0 { -wide } else { wide }),
                 }
             })
             .collect();
-        let tables: Vec<Vec<Fr>> = (0..8)
+        let tables: Vec<Vec<Fr>> = (0..6)
             .map(|table| {
                 rows.iter()
                     .map(|row| row.field_values::<Fr>()[table])
@@ -483,8 +469,6 @@ mod tests {
         let ids = [
             left_operand_is_rs1(),
             rs1_value(),
-            left_operand_is_pc(),
-            unexpanded_pc(),
             right_operand_is_rs2(),
             rs2_value(),
             right_operand_is_imm(),
@@ -528,8 +512,8 @@ mod tests {
         let eq = eq_table(&r_product);
         let mut claim = fr(0);
         for j in 0..1usize << log_t {
-            let right = tables[4][j] * tables[5][j] + tables[6][j] * tables[7][j];
-            let left = tables[0][j] * tables[1][j] + tables[2][j] * tables[3][j];
+            let right = tables[2][j] * tables[3][j] + tables[4][j] * tables[5][j];
+            let left = tables[0][j] * tables[1][j];
             claim += eq[j] * (right + gamma * left);
         }
 

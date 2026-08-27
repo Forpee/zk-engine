@@ -41,11 +41,12 @@ use jolt_claims::protocols::jolt::relations::instruction::InstructionReadRafOutp
 use jolt_field::JoltField;
 use jolt_lookup_tables::tables::prefixes::{PrefixEval, ALL_PREFIXES};
 use jolt_lookup_tables::tables::suffixes::SuffixEval;
-use jolt_lookup_tables::{LookupBits, LookupTableKind, XLEN as RISCV_XLEN};
+use jolt_lookup_tables::LookupBits;
 use jolt_poly::{BindingOrder, Polynomial, UnivariatePoly};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use jolt_verifier::stages::relations::SumcheckInputClaims;
 use jolt_verifier::stages::stage5::InstructionReadRaf;
+use jolt_wasm_tables::{WasmTable, XLEN};
 use jolt_witness::witnesses::{InstructionRafFlag, LookupIndex, TableIndex};
 use jolt_witness::{collect_bundles, JoltWitnessPlane, WitnessBundle};
 
@@ -188,7 +189,7 @@ pub struct InstructionReadRafKernel<F: JoltField> {
     r_reduction: Vec<F>,
     #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
     rows: Vec<InstructionReadRafWitness>,
-    /// Per-table cycle buckets, indexed by `LookupTableKind::index()`.
+    /// Per-table cycle buckets, indexed by `WasmTable::index()`.
     buckets: Vec<Vec<usize>>,
     /// Condensed per-cycle eq weights: after phase `p` starts,
     /// `u[j] = eq(r_reduction, j) · Π_{q<p} eq(phase-q challenges, chunk_q(k_j))`.
@@ -204,7 +205,7 @@ pub struct InstructionReadRafKernel<F: JoltField> {
     /// Per present table (enum index, suffix `Q` polynomials in
     /// `table.suffixes()` order) for the current phase.
     #[cfg_attr(feature = "allocative", allocative(visit = crate::backend::visit_keyed_polys))]
-    suffix_tables: Vec<(LookupTableKind<RISCV_XLEN>, Vec<Polynomial<F>>)>,
+    suffix_tables: Vec<(WasmTable, Vec<Polynomial<F>>)>,
     raf_left: RafDecomposition<F>,
     raf_right: RafDecomposition<F>,
     raf_identity: RafDecomposition<F>,
@@ -232,7 +233,7 @@ impl<F: JoltField> InstructionReadRafKernel<F> {
     ) -> Result<Self, KernelError<F>> {
         let address_bits = dimensions.instruction_address_bits();
         let log_t = dimensions.log_t();
-        if address_bits != 2 * RISCV_XLEN {
+        if address_bits != 2 * XLEN {
             return Err(KernelError::Unsupported {
                 reason: "instruction read-RAF supports only the 2·XLEN interleaved-operand \
                          address width",
@@ -261,7 +262,7 @@ impl<F: JoltField> InstructionReadRafKernel<F> {
             });
         }
 
-        let mut buckets = vec![Vec::new(); LookupTableKind::<RISCV_XLEN>::COUNT];
+        let mut buckets = vec![Vec::new(); WasmTable::COUNT];
         for (j, row) in rows.iter().enumerate() {
             if let Some(table_index) = row.table_index.0 {
                 buckets
@@ -441,7 +442,7 @@ impl<F: JoltField> InstructionReadRafKernel<F> {
         }
 
         // Read-checking suffix accumulators, per present table.
-        self.suffix_tables = LookupTableKind::<RISCV_XLEN>::iter()
+        self.suffix_tables = WasmTable::iter()
             .filter(|table| !self.buckets[table.index()].is_empty())
             .map(|table| {
                 let suffixes = table.suffixes();
@@ -571,7 +572,7 @@ impl<F: JoltField> InstructionReadRafKernel<F> {
     fn init_cycle_rounds(&mut self) {
         let gamma_sqr = self.gamma * self.gamma;
         let empty_bits = LookupBits::new(0, 0);
-        let table_values: Vec<F> = LookupTableKind::<RISCV_XLEN>::iter()
+        let table_values: Vec<F> = WasmTable::iter()
             .map(|table| {
                 let suffix_evals: Vec<SuffixEval<F>> = table
                     .suffixes()
@@ -761,7 +762,7 @@ impl<F: JoltField> SumcheckKernel<F> for InstructionReadRafKernel<F> {
         // claim), so they are direct eq-weighted sums over the trace.
         let r_cycle: Vec<F> = self.cycle_challenges.iter().rev().copied().collect();
         let eq_cycle = eq_table(&r_cycle);
-        let mut lookup_table_flags = vec![F::zero(); LookupTableKind::<RISCV_XLEN>::COUNT];
+        let mut lookup_table_flags = vec![F::zero(); WasmTable::COUNT];
         let mut instruction_raf_flag = F::zero();
         for (row, &eq) in self.rows.iter().zip(&eq_cycle) {
             if let Some(index) = row.table_index.0 {

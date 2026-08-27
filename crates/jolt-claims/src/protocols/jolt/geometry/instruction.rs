@@ -28,19 +28,10 @@ pub(crate) const READ_RAF_BASE_DEGREE: usize = 2;
 /// right lookup operand only *modulo* the field characteristic, so it is
 /// injective exactly when `p >= 2^(2·XLEN)`. BN254's scalar field clears
 /// `2^128` by 126 bits, and an aliased address `k + p ~ 2^254` is not even
-/// representable in 128 one-hot address variables. The Akita fp128 field is
-/// `p = 2^128 - 2^32 + 22537`, which falls short of `2^128` by 4_294_944_759,
-/// giving every honest index below that window a second committable preimage
-/// that the lookup table reads differently. See [`upper_half_all_ones`] for the
-/// predicate that closes it.
-///
-/// This is a property of the *field*, not of the commitment scheme; `akita`
-/// is the feature that selects fp128 and is the only configuration where the
-/// precondition fails today. Read it from here rather than re-deriving
-/// `cfg!(feature = "akita")` downstream — `jolt-kernels` has no `akita`
-/// feature of its own, so a local `cfg!` there would silently be `false` and
-/// desynchronize the prover from the verifier.
-pub const CANONICAL_INSTRUCTION_ADDRESS: bool = cfg!(feature = "akita");
+/// representable in 128 one-hot address variables, so no pinning is needed.
+/// The predicate stays here as the single owner both sides read (see
+/// [`upper_half_all_ones`] for the closing predicate a smaller field needs).
+pub const CANONICAL_INSTRUCTION_ADDRESS: bool = false;
 
 /// The multilinear extension of `1[high_XLEN(k) == 2^XLEN - 1]`, evaluated at
 /// an instruction read-RAF address point.

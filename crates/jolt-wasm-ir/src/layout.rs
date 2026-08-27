@@ -3,8 +3,10 @@
 //! argument's word index is dense (`(address − RAM_BASE) / 8`).
 //!
 //! All regions sit at or above `0x8000_0000`, the RAM window of Jolt's memory
-//! argument. Public I/O lives in memory: the host writes the entry's
-//! arguments to [`INPUTS_BASE`] before execution and reads its results from
+//! argument, in this order: system words, public inputs, public outputs, the
+//! shadow call stack (plus its guard page), globals, linear memory. Public
+//! I/O lives in memory: the host writes the entry's arguments to
+//! [`INPUTS_BASE`] before execution and reads its results from
 //! [`OUTPUTS_BASE`] and the termination word after — the initial and final
 //! memory states are the proof's public inputs.
 
@@ -14,16 +16,11 @@ pub const WORD_BYTES: u64 = 8;
 /// First guest address of the RAM argument's word index space.
 pub const RAM_BASE: u64 = 0x9000_0000;
 
-/// Shadow call stack: spilled frames and return addresses, growing upward.
-pub const SHADOW_STACK_BASE: u64 = RAM_BASE;
-pub const SHADOW_STACK_SIZE: u64 = 1 << 20;
-/// Unmapped guard page above the shadow stack: a spill into it is the
-/// `CallStackExhausted` trap, never a silent write into the system words.
-pub const SHADOW_GUARD_SIZE: u64 = 0x1000;
-
 /// System words: slot 0 is the linear-memory size in bytes, slot 1 the
-/// termination word (written `1` by an entry stub when it completes).
-pub const SYSTEM_BASE: u64 = SHADOW_STACK_BASE + SHADOW_STACK_SIZE + SHADOW_GUARD_SIZE;
+/// termination word (written `1` by an entry stub when it completes). The
+/// system and public I/O words sit at the bottom of RAM so a program that
+/// touches little memory proves over a small RAM domain.
+pub const SYSTEM_BASE: u64 = RAM_BASE;
 pub const SYSTEM_SIZE: u64 = 0x1000;
 pub const MEMORY_SIZE_ADDR: u64 = SYSTEM_BASE;
 pub const TERMINATION_ADDR: u64 = SYSTEM_BASE + 8;
@@ -39,8 +36,15 @@ pub const OUTPUTS_SIZE: u64 = 0x1000;
 pub const MAX_INPUT_WORDS: u64 = INPUTS_SIZE / WORD_BYTES;
 pub const MAX_OUTPUT_WORDS: u64 = OUTPUTS_SIZE / WORD_BYTES;
 
+/// Shadow call stack: spilled frames and return addresses, growing upward.
+pub const SHADOW_STACK_BASE: u64 = OUTPUTS_BASE + OUTPUTS_SIZE;
+pub const SHADOW_STACK_SIZE: u64 = 1 << 20;
+/// Unmapped guard page above the shadow stack: a spill into it is the
+/// `CallStackExhausted` trap, never a silent write into the globals.
+pub const SHADOW_GUARD_SIZE: u64 = 0x1000;
+
 /// Globals region: global `i` lives at `GLOBALS_BASE + 8 * i`.
-pub const GLOBALS_BASE: u64 = OUTPUTS_BASE + OUTPUTS_SIZE;
+pub const GLOBALS_BASE: u64 = SHADOW_STACK_BASE + SHADOW_STACK_SIZE + SHADOW_GUARD_SIZE;
 pub const GLOBALS_SIZE: u64 = 0x1_0000;
 
 /// Linear memory: wasm address `a` maps to guest address `LINEAR_MEMORY_BASE + a`.

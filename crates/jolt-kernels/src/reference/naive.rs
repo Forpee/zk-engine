@@ -436,7 +436,7 @@ mod tests {
 
     #[derive(jolt_claims::InputClaims)]
     struct ToyInputs<C> {
-        #[opening(UnexpandedPC, from = RegistersValEvaluation)]
+        #[opening(PC, from = RegistersValEvaluation)]
         total: C,
         // The dual-role cell: consumed here and re-staged on
         // `ToyOutputs::untrusted` via the shared-id inference.
@@ -491,7 +491,7 @@ mod tests {
         }
 
         fn input_expression<F: Ring>(&self) -> JoltExpr<F> {
-            opening(virt(JoltVirtualPolynomial::UnexpandedPC))
+            opening(virt(JoltVirtualPolynomial::PC))
         }
 
         fn output_expression<F: Ring>(&self) -> JoltExpr<F> {

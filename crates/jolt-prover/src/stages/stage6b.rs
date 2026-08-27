@@ -109,12 +109,9 @@ where
     let bytecode_table_rows = if committed_program {
         None
     } else {
-        Some(witness.program_preprocessing().bytecode.bytecode.as_slice())
+        Some(witness.program_preprocessing().bytecode.rows())
     };
-    let entry_bytecode_index = preprocessing
-        .verifier
-        .program
-        .entry_bytecode_index_checked(JoltRelationId::BytecodeReadRaf)?;
+    let entry_bytecode_index = checked.entry_pc;
     let stage1_cycle_binding = stage1.cycle_binding_checked(JoltRelationId::BytecodeReadRaf)?;
     let sumchecks = Stage6bSumchecks::build_from_parts(Stage6bBuildParts {
         formula_dimensions: &formula_dimensions,

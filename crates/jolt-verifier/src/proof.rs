@@ -17,38 +17,11 @@ use crate::{
 
 /// The proof-carried polynomial commitments on the homomorphic build: one
 /// commitment per committed polynomial.
-#[cfg(not(feature = "akita"))]
 pub type ProofCommitments<PCS> = JoltCommitments<<PCS as Commitment>::Output>;
-/// The proof-carried polynomial commitments on the `akita` build: the single
-/// packed `OneHotTrace` commitment carrying every per-proof column.
-#[cfg(feature = "akita")]
-pub type ProofCommitments<PCS> = <PCS as Commitment>::Output;
 
 /// The final-opening discharge on the homomorphic build: one RLC-batched PCS
 /// opening proof at the unified point.
-#[cfg(not(feature = "akita"))]
 pub type JointOpeningProof<PCS> = <PCS as CommitmentScheme>::Proof;
-/// Akita proofs for the prefix-packed OneHotTrace polynomial and each
-/// independently pointed auxiliary object, in canonical object order.
-#[cfg(feature = "akita")]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AkitaJointOpeningProof<P> {
-    pub one_hot_trace: P,
-    pub auxiliary: Vec<P>,
-}
-
-#[cfg(feature = "akita")]
-impl<P> AkitaJointOpeningProof<P> {
-    pub fn new(one_hot_trace: P, auxiliary: Vec<P>) -> Self {
-        Self {
-            one_hot_trace,
-            auxiliary,
-        }
-    }
-}
-
-#[cfg(feature = "akita")]
-pub type JointOpeningProof<PCS> = AkitaJointOpeningProof<<PCS as CommitmentScheme>::Proof>;
 
 #[expect(
     non_snake_case,
@@ -92,7 +65,6 @@ where
         }
     }
 
-    #[cfg(not(feature = "akita"))]
     pub(crate) fn blindfold_proof(&self) -> Result<&ZkProof, VerifierError> {
         match &self.claims {
             JoltProofClaims::Clear(_) => Err(VerifierError::MissingBlindFoldProof),
@@ -183,10 +155,6 @@ pub struct ClearProofClaims<F: JoltField> {
     pub stage6a: stage6a::outputs::Stage6aOutputClaims<F>,
     pub stage6b: stage6b::outputs::Stage6bOutputClaims<F>,
     pub stage7: stage7::outputs::Stage7OutputClaims<F>,
-    /// The reconstruction phase's claims, at the head of the stage-8 region;
-    /// cells are present exactly when advice or a committed program is.
-    #[cfg(feature = "akita")]
-    pub reconstruction: crate::stages::stage8::reconstruction::ReconstructionOutputClaims<F>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,8 +177,4 @@ where
     pub stage6a_sumcheck_proof: SumcheckProof<F, VC::Output>,
     pub stage6b_sumcheck_proof: SumcheckProof<F, VC::Output>,
     pub stage7_sumcheck_proof: SumcheckProof<F, VC::Output>,
-    /// The reconstruction phase, at the head of the stage-8 region; present
-    /// exactly when advice or a committed program is.
-    #[cfg(feature = "akita")]
-    pub reconstruction_sumcheck_proof: Option<SumcheckProof<F, VC::Output>>,
 }

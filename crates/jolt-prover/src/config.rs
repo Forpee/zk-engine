@@ -2,17 +2,14 @@
 //!
 //! These five values are exactly the proof's wire config block
 //! (`JoltProof::{trace_length, ram_K, rw_config, one_hot_config,
-//! trace_polynomial_order}`) plus the Fiat-Shamir preamble inputs. The
-//! derivation policies here must match `jolt-prover-legacy`'s choices
-//! byte-for-byte while it remains the parity oracle; the byte-diff harness
-//! pins them.
+//! trace_polynomial_order}`) plus the Fiat-Shamir preamble inputs.
 
-use common::constants::{ONEHOT_CHUNK_THRESHOLD_LOG_T, REGISTER_COUNT, XLEN};
-use common::jolt_device::MemoryLayout;
 use jolt_claims::protocols::jolt::{JoltOneHotConfig, JoltReadWriteConfig, TracePolynomialOrder};
 use jolt_field::JoltField;
-use jolt_program::execution::{RamAccess, TraceRow};
-use jolt_riscv::JoltTraceRow;
+use jolt_wasm_ir::layout::remap_word_address;
+use jolt_wasm_ir::{MemoryLimits, REGISTER_COUNT};
+use jolt_wasm_program::{max_ram_k, min_ram_k, WasmTraceRow};
+use jolt_wasm_tables::XLEN;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -23,16 +20,12 @@ const LOOKUP_ADDRESS_BITS: usize = 2 * XLEN;
 #[cfg(feature = "parallel")]
 const PARALLEL_DERIVE_MIN_ROWS: usize = 1 << 16;
 
-/// The minimum padded trace length — the compiled protocol's PCS floor
-/// (legacy's `PCS::MIN_PADDED_TRACE_LENGTH`). Dory needs `T >= K^(1/D)`
-/// (256); Akita's folded-only protocol cannot schedule the K=16
-/// `OneHotTrace` group below 16 variables, and column arity is
-/// `log_k_chunk + log_T`, so the packed pipeline pads every trace to at
-/// least 2^12 cycles.
-#[cfg(not(feature = "akita"))]
+/// The minimum padded trace length — Dory needs `T >= K^(1/D)` (256).
 const MIN_PADDED_TRACE_LENGTH: usize = 256;
-#[cfg(feature = "akita")]
-const MIN_PADDED_TRACE_LENGTH: usize = 1 << 12;
+
+/// Trace length (log2) at which the one-hot chunking switches to the wide
+/// policy.
+const ONEHOT_CHUNK_THRESHOLD_LOG_T: usize = 25;
 
 /// The proof-shape configuration for one proving run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,106 +38,67 @@ pub struct ProverConfig {
     pub rw_config: JoltReadWriteConfig,
     pub one_hot_config: JoltOneHotConfig,
     /// Coefficient placement of the trace polynomials in the commitment
-    /// matrix. [`ProverConfig::derive`] always picks cycle-major (legacy has
-    /// no production selection logic); address-major is chosen by
-    /// overwriting this field after derivation. Committed-program
-    /// preprocessing bakes this order into its chunk commitments — it must
-    /// be chosen before preprocessing and match here (stage 0 checks).
+    /// matrix. [`ProverConfig::derive`] always picks cycle-major;
+    /// address-major is chosen by overwriting this field after derivation.
+    /// Committed-program preprocessing bakes this order into its chunk
+    /// commitments — it must be chosen before preprocessing and match here
+    /// (stage 0 checks).
     pub trace_polynomial_order: TracePolynomialOrder,
 }
 
 impl ProverConfig {
     /// Derive the proof shape from an unpadded trace: pad the length (minimum
     /// 256 so `T >= K^(1/D)`, else next power of two past the trace plus its
-    /// final no-op), size RAM to the highest touched (remapped) address or the
-    /// program image extent, and pick the chunking policies from `log_T`.
+    /// final no-op), size RAM to the highest touched word, the program image
+    /// extent, or the public I/O window (whichever is largest), and pick the
+    /// chunking policies from `log_T`.
     #[tracing::instrument(skip_all, name = "ProverConfig::derive", fields(rows = rows.len()))]
-    pub fn derive<F: JoltField>(
-        rows: &[TraceRow],
-        memory_layout: &MemoryLayout,
-        min_bytecode_address: u64,
-        program_image_len_words: usize,
-        max_padded_trace_length: usize,
-    ) -> Result<Self, ProverError<F>> {
-        Self::derive_from_rows(
-            rows,
-            memory_layout,
-            min_bytecode_address,
-            program_image_len_words,
-            max_padded_trace_length,
-            |row| match row.ram_access {
-                RamAccess::Read(read) => Some(read.address),
-                RamAccess::Write(write) => Some(write.address),
-                RamAccess::NoOp => None,
-            },
-        )
-    }
-
-    /// Derives the proof shape from compact proof rows.
-    #[tracing::instrument(
-        skip_all,
-        name = "ProverConfig::derive_compact",
-        fields(rows = rows.len())
-    )]
-    pub fn derive_compact<F: JoltField>(
-        rows: &[JoltTraceRow],
-        memory_layout: &MemoryLayout,
-        min_bytecode_address: u64,
-        program_image_len_words: usize,
-        max_padded_trace_length: usize,
-    ) -> Result<Self, ProverError<F>> {
-        Self::derive_from_rows(
-            rows,
-            memory_layout,
-            min_bytecode_address,
-            program_image_len_words,
-            max_padded_trace_length,
-            |row| (row.is_load() || row.is_store()).then(|| row.ram_address()),
-        )
-    }
-
     #[expect(non_snake_case)]
-    fn derive_from_rows<F: JoltField, R: Sync>(
-        rows: &[R],
-        memory_layout: &MemoryLayout,
-        min_bytecode_address: u64,
-        program_image_len_words: usize,
-        max_padded_trace_length: usize,
-        ram_address: impl Fn(&R) -> Option<u64> + Sync,
+    pub fn derive<F: JoltField>(
+        rows: &[WasmTraceRow],
+        program_image_end_index: u64,
+        memory: MemoryLimits,
+        max_trace_length: usize,
     ) -> Result<Self, ProverError<F>> {
         let trace_length = if rows.len() < MIN_PADDED_TRACE_LENGTH {
             MIN_PADDED_TRACE_LENGTH
         } else {
             (rows.len() + 1).next_power_of_two()
         };
-        if trace_length > max_padded_trace_length {
+        if trace_length > max_trace_length {
             return Err(ProverError::Unsupported {
                 reason: "trace exceeds the preprocessing's maximum padded trace length",
             });
         }
 
+        let touched_word = |row: &WasmTraceRow| {
+            (row.is_load() || row.is_store())
+                .then(|| remap_word_address(row.ram_address()))
+                .flatten()
+        };
         #[cfg(feature = "parallel")]
         let touched = if rows.len() >= PARALLEL_DERIVE_MIN_ROWS {
-            rows.par_iter()
-                .filter_map(|row| remap_address(ram_address(row).unwrap_or(0), memory_layout))
-                .max()
-                .unwrap_or(0)
+            rows.par_iter().filter_map(touched_word).max()
         } else {
-            rows.iter()
-                .filter_map(|row| remap_address(ram_address(row).unwrap_or(0), memory_layout))
-                .max()
-                .unwrap_or(0)
+            rows.iter().filter_map(touched_word).max()
         };
         #[cfg(not(feature = "parallel"))]
-        let touched = rows
-            .iter()
-            .filter_map(|row| remap_address(ram_address(row).unwrap_or(0), memory_layout))
-            .max()
-            .unwrap_or(0);
-        let image_end = remap_address(min_bytecode_address, memory_layout).unwrap_or(0)
-            + program_image_len_words as u64
-            + 1;
-        let ram_K = touched.max(image_end).next_power_of_two() as usize;
+        let touched = rows.iter().filter_map(touched_word).max();
+        let floor = min_ram_k(program_image_end_index).map_err(|_| ProverError::Unsupported {
+            reason: "the program image does not fit a RAM domain",
+        })?;
+        let ram_K = touched
+            .map_or(0, |word| word as usize + 1)
+            .next_power_of_two()
+            .max(floor);
+        let ceiling = max_ram_k(memory).map_err(|_| ProverError::Unsupported {
+            reason: "the linear memory limit does not fit a RAM domain",
+        })?;
+        if ram_K > ceiling {
+            return Err(ProverError::Unsupported {
+                reason: "the trace touches RAM beyond the program's memory limit",
+            });
+        }
 
         let log_T = trace_length.ilog2() as usize;
         Ok(Self {
@@ -157,23 +111,14 @@ impl ProverConfig {
     }
 
     /// The shared commitment-embedding variable count: the one-hot main matrix
-    /// (`log_k_chunk + log_T`) maxed with the advice and committed-program
-    /// candidates that are actually present in this run.
+    /// (`log_k_chunk + log_T`) maxed with the committed-program candidates
+    /// when present.
     pub fn commitment_total_vars(
         &self,
-        memory_layout: &MemoryLayout,
-        has_trusted_advice: bool,
-        has_untrusted_advice: bool,
         committed_program: Option<CommittedProgramCandidates>,
     ) -> usize {
         let mut total_vars =
             self.one_hot_config.committed_chunk_bits() + self.trace_length.ilog2() as usize;
-        if has_trusted_advice {
-            total_vars = total_vars.max(advice_total_vars(memory_layout.max_trusted_advice_size));
-        }
-        if has_untrusted_advice {
-            total_vars = total_vars.max(advice_total_vars(memory_layout.max_untrusted_advice_size));
-        }
         if let Some(committed) = committed_program {
             total_vars = total_vars
                 .max(committed.bytecode_chunk_vars)
@@ -181,21 +126,6 @@ impl ProverConfig {
         }
         total_vars
     }
-}
-
-/// Map a byte address into the RAM word index space: word offsets from the
-/// memory layout's lowest mapped address; address 0 means "no access".
-///
-/// Panics on a nonzero address below the layout's lowest mapped address — a
-/// malformed trace, failed loudly here (matching legacy) rather than
-/// silently under-sizing `ram_K` and failing as an opaque sumcheck error.
-pub fn remap_address(address: u64, memory_layout: &MemoryLayout) -> Option<u64> {
-    if address == 0 {
-        return None;
-    }
-    let lowest = memory_layout.get_lowest_address();
-    assert!(address >= lowest, "Unexpected address {address}");
-    Some((address - lowest) / 8)
 }
 
 /// Read-write checking phase splits: cycle variables in phase 1, address
@@ -210,12 +140,9 @@ fn read_write_config(log_T: usize, ram_log_K: usize) -> JoltReadWriteConfig {
     }
 }
 
-/// One-hot chunking policy, mirroring `jolt-prover-legacy`'s
-/// `OneHotConfig::new`: below the trace-length threshold (`log_T < 25`),
+/// One-hot chunking policy: below the trace-length threshold (`log_T < 25`),
 /// 4-bit committed chunks and `LOG_K/8 = 16`-bit virtual-RA chunks; at or
-/// above it, 8-bit committed chunks and `LOG_K/4 = 32`-bit virtual-RA chunks
-/// (a branch that requires a 2^25-cycle trace and may never have run in
-/// practice — kept for parity).
+/// above it, 8-bit committed chunks and `LOG_K/4 = 32`-bit virtual-RA chunks.
 #[expect(non_snake_case)]
 fn one_hot_config(log_T: usize) -> JoltOneHotConfig {
     if log_T < ONEHOT_CHUNK_THRESHOLD_LOG_T {
@@ -232,7 +159,7 @@ fn one_hot_config(log_T: usize) -> JoltOneHotConfig {
 }
 
 /// The committed-program precommitted candidates' variable counts, folded
-/// into the shared commitment grid alongside the advice candidates.
+/// into the shared commitment grid.
 #[derive(Clone, Copy, Debug)]
 pub struct CommittedProgramCandidates {
     pub bytecode_chunk_vars: usize,
@@ -251,10 +178,4 @@ impl CommittedProgramCandidates {
             _ => None,
         }
     }
-}
-
-/// A word-aligned advice buffer's balanced Dory matrix variable count.
-pub(crate) fn advice_total_vars(max_advice_size_bytes: u64) -> usize {
-    let words = (max_advice_size_bytes / 8) as usize;
-    words.next_power_of_two().max(1).ilog2() as usize
 }

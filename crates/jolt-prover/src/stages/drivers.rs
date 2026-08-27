@@ -96,7 +96,6 @@ mod stage6b {
     };
     // The packed batch has no inc member — the fused-inc read-raf stages
     // discharge the reduced inc claims instead.
-    #[cfg(not(feature = "akita"))]
     use jolt_verifier::stages::stage6b::inc_claim_reduction::IncClaimReduction;
     use jolt_verifier::stages::stage6b::instruction_ra_virtualization::InstructionRaVirtualization;
     use jolt_verifier::stages::stage6b::outputs::{
@@ -338,7 +337,7 @@ mod twin_tests {
         ToyAlphaOutputs,
         rel = RegistersValEvaluation,
         output = LookupOutput,
-        input = UnexpandedPC
+        input = PC
     );
     toy_relation!(
         BetaSymbolic,
@@ -347,7 +346,7 @@ mod twin_tests {
         ToyBetaOutputs,
         rel = RamValCheck,
         output = LeftLookupOperand,
-        input = UnexpandedPC
+        input = PC
     );
     toy_relation!(
         GammaSymbolic,
@@ -356,7 +355,7 @@ mod twin_tests {
         ToyGammaOutputs,
         rel = SpartanShift,
         output = RightLookupOperand,
-        input = UnexpandedPC
+        input = PC
     );
     toy_relation!(
         DeltaSymbolic,
@@ -365,7 +364,7 @@ mod twin_tests {
         ToyDeltaOutputs,
         rel = RegistersReadWriteChecking,
         output = RegistersVal,
-        input = UnexpandedPC,
+        input = PC,
         head_pad = HEAD_PAD
     );
 
@@ -693,7 +692,7 @@ mod twin_tests {
             clippy::unimplemented,
             reason = "the accessor returns a borrow, so it cannot report the every-access error the other NoWitness accessors do; the toy kernels never read the program"
         )]
-        fn program_preprocessing(&self) -> &jolt_program::preprocess::JoltProgramPreprocessing {
+        fn program_preprocessing(&self) -> &jolt_wasm_program::WasmProgramPreprocessing {
             unimplemented!("toy driver twin witness carries no program")
         }
     }

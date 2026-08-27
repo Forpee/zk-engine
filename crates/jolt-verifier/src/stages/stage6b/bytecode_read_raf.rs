@@ -8,9 +8,6 @@
 //! address phase.
 
 pub use jolt_claims::protocols::jolt::geometry::bytecode::READ_RAF_CYCLE_STAGES;
-#[cfg(feature = "akita")]
-pub use jolt_claims::protocols::jolt::lattice::relations::read_raf::LatticeBytecodeReadRafOutputClaims;
-#[cfg(not(feature = "akita"))]
 use jolt_claims::protocols::jolt::relations;
 pub use jolt_claims::protocols::jolt::relations::bytecode::{
     BytecodeReadRafCyclePhaseChallenges, BytecodeReadRafCyclePhaseCommittedChallenges,
@@ -35,23 +32,12 @@ use jolt_wasm_ir::BytecodeRow;
 use crate::stages::relations::ConcreteSumcheck;
 use crate::VerifierError;
 
-#[cfg(not(feature = "akita"))]
 type CycleSymbolic = relations::bytecode::ReadRafCyclePhase;
-#[cfg(feature = "akita")]
-type CycleSymbolic =
-    jolt_claims::protocols::jolt::lattice::relations::read_raf::LatticeReadRafCyclePhase;
-#[cfg(not(feature = "akita"))]
 type CycleSymbolicCommitted = relations::bytecode::ReadRafCyclePhaseCommitted;
-#[cfg(feature = "akita")]
-type CycleSymbolicCommitted =
-    jolt_claims::protocols::jolt::lattice::relations::read_raf::LatticeReadRafCyclePhaseCommitted;
 
 /// The cycle-phase produced-claims type: `BytecodeRa` openings, plus (packed)
 /// the `FusedInc` opening at the bound cycle point.
-#[cfg(not(feature = "akita"))]
 pub type BytecodeReadRafCycleOutputClaims<C> = BytecodeReadRafOutputClaims<C>;
-#[cfg(feature = "akita")]
-pub type BytecodeReadRafCycleOutputClaims<C> = LatticeBytecodeReadRafOutputClaims<C>;
 
 /// Clear-only aux for the full-program cycle relation's bytecode-table fold:
 /// the borrowed table rows plus the register points and per-stage gammas that
@@ -80,24 +66,14 @@ pub struct BytecodeReadRafCycleInputs<'a, F: JoltField> {
 }
 
 fn cycle_symbolic(dimensions: BytecodeReadRafDimensions) -> CycleSymbolic {
-    #[cfg(not(feature = "akita"))]
     {
         CycleSymbolic::new((dimensions, NUM_BYTECODE_VAL_STAGES))
-    }
-    #[cfg(feature = "akita")]
-    {
-        CycleSymbolic::new(dimensions)
     }
 }
 
 fn cycle_symbolic_committed(dimensions: BytecodeReadRafDimensions) -> CycleSymbolicCommitted {
-    #[cfg(not(feature = "akita"))]
     {
         CycleSymbolicCommitted::new((dimensions, NUM_BYTECODE_VAL_STAGES))
-    }
-    #[cfg(feature = "akita")]
-    {
-        CycleSymbolicCommitted::new(dimensions)
     }
 }
 
@@ -202,7 +178,6 @@ fn r_cycle_suffix<F: JoltField>(log_t: usize, opening_point: &[F]) -> Result<&[F
 
 /// Evaluate the full-program bytecode read-RAF output expression at the produced
 /// `BytecodeRa` openings and public values.
-#[cfg(not(feature = "akita"))]
 #[expect(
     clippy::wildcard_enum_match_arm,
     reason = "fail-closed: ids not owned by this relation resolve to a missing-claim error"
@@ -263,13 +238,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for BytecodeReadRaf<F> {
         derive_cycle_opening_points(&self.r_address, self.committed_chunk_bits, r_cycle)
     }
 
-    #[cfg_attr(
-        feature = "akita",
-        expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "fail-closed: ids not owned by this relation resolve to a missing-claim error"
-        )
-    )]
     fn expected_output(
         &self,
         _input_points: &BytecodeReadRafInputClaims<Vec<F>>,
@@ -312,7 +280,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for BytecodeReadRaf<F> {
             spartan_shift_raf: committed.spartan_shift_raf,
             entry: committed.entry,
         };
-        #[cfg(not(feature = "akita"))]
         {
             expected_output_from_publics(
                 self.dimensions,
@@ -325,70 +292,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for BytecodeReadRaf<F> {
         // bound to the four consuming relations' cycle points, resolved
         // through the lattice cycle output expression against the `FusedInc`
         // opening.
-        #[cfg(feature = "akita")]
-        {
-            // The four fused-inc consumer stages resolve from the staged store
-            // fold (its complement for the register legs) against their own
-            // cycle eqs; the `FusedInc` factor is the relation's own opening.
-            let base_stages = NUM_BYTECODE_VAL_STAGES - 1;
-            // The store stage is the last staged wire (index `base_stages`).
-            let store_at_r_address = *stage_values_at_r_address
-                .last()
-                .ok_or_else(|| public_input_failed("bytecode stage fold is empty"))?;
-            let fused_stage_value = |stage: usize| -> Result<F, VerifierError> {
-                let address_fold = if stage < base_stages + 2 {
-                    store_at_r_address
-                } else {
-                    F::one() - store_at_r_address
-                };
-                let cycle_eq = committed
-                    .stage_cycle_eqs
-                    .get(stage)
-                    .ok_or_else(|| public_input_failed("missing fused stage cycle point"))?;
-                Ok(address_fold * *cycle_eq)
-            };
-            let public_values = base_public_values;
-            let output_openings = bytecode::read_raf_output_openings(self.dimensions);
-            if output_values.bytecode_ra.len() != output_openings.bytecode_ra.len() {
-                return Err(public_input_failed(format!(
-                    "bytecode RA claim count mismatch: expected {}, got {}",
-                    output_openings.bytecode_ra.len(),
-                    output_values.bytecode_ra.len()
-                )));
-            }
-            self.symbolic().output_expression::<F>().try_evaluate(
-                |id| {
-                    if *id == bytecode::fused_inc_read_raf_opening() {
-                        return Ok(output_values.fused_inc);
-                    }
-                    for (opening_id, value) in output_openings
-                        .bytecode_ra
-                        .iter()
-                        .zip(&output_values.bytecode_ra)
-                    {
-                        if *id == *opening_id {
-                            return Ok(*value);
-                        }
-                    }
-                    Err(VerifierError::MissingOpeningClaim { id: *id })
-                },
-                |id| match id {
-                    JoltChallengeId::BytecodeReadRaf(BytecodeReadRafChallenge::Gamma) => {
-                        Ok(challenges.gamma)
-                    }
-                    _ => Err(VerifierError::MissingStageClaimChallenge { id: *id }),
-                },
-                |id| match id {
-                    JoltDerivedId::BytecodeReadRaf(
-                        jolt_claims::protocols::jolt::BytecodeReadRafPublic::StageValue(stage),
-                    ) if *stage >= base_stages => fused_stage_value(*stage),
-                    JoltDerivedId::BytecodeReadRaf(public_id) => public_values
-                        .value(*public_id)
-                        .ok_or(VerifierError::MissingStageClaimDerived { id: *id }),
-                    _ => Err(VerifierError::MissingStageClaimDerived { id: *id }),
-                },
-            )
-        }
     }
 }
 
@@ -404,16 +307,8 @@ fn derive_cycle_opening_points<F: JoltField>(
         .into_iter()
         .map(|chunk| [chunk.as_slice(), r_cycle.as_slice()].concat())
         .collect();
-    #[cfg(not(feature = "akita"))]
     {
         Ok(BytecodeReadRafOutputClaims { bytecode_ra })
-    }
-    #[cfg(feature = "akita")]
-    {
-        Ok(LatticeBytecodeReadRafOutputClaims {
-            bytecode_ra,
-            fused_inc: r_cycle,
-        })
     }
 }
 
@@ -508,10 +403,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for BytecodeReadRafCommitted<F> {
         let output_openings = bytecode::read_raf_output_openings(self.dimensions);
         self.symbolic().output_expression::<F>().try_evaluate(
             |id| {
-                #[cfg(feature = "akita")]
-                if *id == bytecode::fused_inc_read_raf_opening() {
-                    return Ok(output_values.fused_inc);
-                }
                 for (stage, value) in self.val_stages.iter().enumerate() {
                     if *id == bytecode_val_stage_opening(stage) {
                         return Ok(*value);

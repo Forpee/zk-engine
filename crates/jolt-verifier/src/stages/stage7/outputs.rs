@@ -221,20 +221,12 @@ mod tests {
 
         // Sentinels are sequential in canonical append order. Under Akita the
         // hamming reduction itself emits the increment digit and carry openings.
-        #[cfg(not(feature = "akita"))]
         let (trusted, untrusted, chunk1, chunk2, image, plain_last, committed_last) =
             (5, 6, 7, 8, 9, 6, 9);
-        #[cfg(feature = "akita")]
-        let (trusted, untrusted, chunk1, chunk2, image, plain_last, committed_last) =
-            (7, 8, 9, 10, 11, 8, 11);
         let hamming = HammingWeightClaimReductionOutputClaims {
             instruction_ra: vec![fr(1), fr(2)],
             bytecode_ra: vec![fr(3)],
             ram_ra: vec![fr(4)],
-            #[cfg(feature = "akita")]
-            balanced_inc_digits: vec![fr(5)],
-            #[cfg(feature = "akita")]
-            balanced_inc_carry: fr(6),
         };
         let trusted_advice = TrustedAdviceAddressPhaseOutputClaims {
             trusted: fr(trusted),

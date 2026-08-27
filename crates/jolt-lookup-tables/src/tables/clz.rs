@@ -1,6 +1,6 @@
 //! `clz(x)`: leading zeros of the left operand (`XLEN` when it is zero); the
 //! right operand is ignored. Used by the WebAssembly catalog; not part of the
-//! RV64 [`LookupTableKind`](crate::LookupTableKind).
+//! the RV64 table catalog.
 //!
 //! MLE: `Σ_i i · x_i · Π_{j<i} (1 − x_j) + XLEN · Π_j (1 − x_j)` with `x_0`
 //! the most-significant bit.

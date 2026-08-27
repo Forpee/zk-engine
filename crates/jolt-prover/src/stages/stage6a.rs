@@ -88,10 +88,7 @@ where
     // mode stages the five raw bound `Val_s` values as extra wire claims; the
     // sumcheck itself is unchanged.
     let stage1_cycle_binding = stage1.cycle_binding_checked(JoltRelationId::BytecodeReadRaf)?;
-    let entry_bytecode_index = preprocessing
-        .verifier
-        .program
-        .entry_bytecode_index_checked(JoltRelationId::BytecodeReadRaf)?;
+    let entry_bytecode_index = checked.entry_pc;
     let sumchecks = Stage6aSumchecks::build_from_parts(Stage6aBuildParts {
         formula_dimensions: &formula_dimensions,
         committed_chunk_bits: config.one_hot_config.committed_chunk_bits(),
@@ -119,19 +116,6 @@ where
         &stage4.output_values,
         &stage5.output_values,
     );
-    // The packed build folds the four reduced `Inc` claims into the bytecode
-    // address-phase input at the fused-inc consumer stage slots — the same
-    // wrapper the verifier's `stage6a::verify` applies.
-    #[cfg(feature = "akita")]
-    let bytecode_input_values =
-        jolt_claims::protocols::jolt::lattice::relations::read_raf::LatticeReadRafAddressPhaseInputClaims {
-            base: bytecode_input_values,
-            inc: jolt_verifier::stages::stage6b::inc_claim_reduction::inc_claim_reduction_input_values_from_upstream(
-                &stage2.output_values,
-                &stage4.output_values,
-                &stage5.output_values,
-            ),
-        };
     let inputs = Stage6aInputClaims {
         bytecode_read_raf: bytecode_input_values,
         booleanity: BooleanityAddressPhaseInputClaims::default(),

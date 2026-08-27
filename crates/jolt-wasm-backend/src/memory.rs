@@ -134,16 +134,16 @@ impl Memory {
             (Region::Linear, LINEAR_MEMORY_BASE, self.linear.len())
         } else if address >= GLOBALS_BASE {
             (Region::Globals, GLOBALS_BASE, self.globals.len())
+        } else if address >= SHADOW_STACK_BASE + SHADOW_STACK_SIZE {
+            return Err(Trap::CallStackExhausted);
+        } else if address >= SHADOW_STACK_BASE {
+            (Region::Shadow, SHADOW_STACK_BASE, self.shadow.len())
         } else if address >= OUTPUTS_BASE {
             (Region::Outputs, OUTPUTS_BASE, self.outputs.len())
         } else if address >= INPUTS_BASE {
             (Region::Inputs, INPUTS_BASE, self.inputs.len())
         } else if address >= SYSTEM_BASE {
             (Region::System, SYSTEM_BASE, self.system.len())
-        } else if address >= SHADOW_STACK_BASE + SHADOW_STACK_SIZE {
-            return Err(Trap::CallStackExhausted);
-        } else if address >= SHADOW_STACK_BASE {
-            (Region::Shadow, SHADOW_STACK_BASE, self.shadow.len())
         } else {
             return Err(oob());
         };

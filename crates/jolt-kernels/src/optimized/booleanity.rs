@@ -57,13 +57,6 @@ use std::sync::Arc;
 
 use jolt_claims::protocols::jolt::geometry::booleanity::BooleanityDimensions;
 use jolt_claims::protocols::jolt::geometry::ra::JoltRaPolynomial;
-#[cfg(feature = "akita")]
-use jolt_claims::protocols::jolt::lattice::relations::booleanity::{
-    lattice_booleanity_output_openings, LatticeBooleanityDimensions,
-};
-#[cfg(feature = "akita")]
-use jolt_claims::protocols::jolt::lattice::BalancedIncChunking;
-#[cfg(not(feature = "akita"))]
 use jolt_claims::protocols::jolt::JoltRelationId;
 use jolt_claims::protocols::jolt::{BooleanityPublic, JoltDerivedId, JoltOpeningId};
 use jolt_claims::OutputClaims;
@@ -80,8 +73,6 @@ use jolt_verifier::stages::stage6a::booleanity::{
     BooleanityAddressPhase, BooleanityAddressPhaseChallenges, BooleanityAddressPhaseOutputClaims,
 };
 use jolt_verifier::stages::stage6b::booleanity::{Booleanity, BooleanityCyclePhaseChallenges};
-#[cfg(feature = "akita")]
-use jolt_witness::witnesses::BalancedIncColumn;
 use jolt_witness::witnesses::RaChunkSelector;
 use jolt_witness::JoltWitnessPlane;
 #[cfg(feature = "parallel")]
@@ -101,8 +92,6 @@ enum ColumnSelector {
     Instruction(RaChunkSelector),
     Bytecode(RaChunkSelector),
     Ram(RaChunkSelector),
-    #[cfg(feature = "akita")]
-    UnsignedInc(BalancedIncColumn),
 }
 
 impl ColumnSelector {
@@ -118,8 +107,6 @@ impl ColumnSelector {
             Self::Ram(selector) => row
                 .remapped_ram_address()
                 .map(|address| selector.chunk_usize(address as usize)),
-            #[cfg(feature = "akita")]
-            Self::UnsignedInc(column) => Some(row.fused_inc_row(*column)),
         }
     }
 }
@@ -133,22 +120,11 @@ impl BooleanityColumns {
     fn openings<F: JoltField>(
         dimensions: BooleanityDimensions,
     ) -> Result<Vec<JoltOpeningId>, KernelError<F>> {
-        #[cfg(not(feature = "akita"))]
         {
             Ok(dimensions
                 .layout
                 .openings(JoltRelationId::Booleanity)
                 .collect())
-        }
-        #[cfg(feature = "akita")]
-        {
-            let lattice_dimensions =
-                LatticeBooleanityDimensions::new(dimensions).map_err(|_| {
-                    KernelError::InvariantViolation {
-                        reason: "the packed shape requires a lattice-compatible chunk width",
-                    }
-                })?;
-            Ok(lattice_booleanity_output_openings(lattice_dimensions))
         }
     }
 
@@ -188,25 +164,6 @@ impl BooleanityColumns {
                 })
             })
             .collect::<Result<Vec<_>, KernelError<F>>>()?;
-        #[cfg(feature = "akita")]
-        let mut selectors = selectors;
-        #[cfg(feature = "akita")]
-        {
-            let chunking = BalancedIncChunking::new(log_k_chunk).map_err(|_| {
-                KernelError::InvariantViolation {
-                    reason: "the packed shape requires a lattice-compatible chunk width",
-                }
-            })?;
-            selectors.extend((0..chunking.chunk_count()).map(|index| {
-                ColumnSelector::UnsignedInc(BalancedIncColumn::Digit {
-                    width: log_k_chunk,
-                    index,
-                })
-            }));
-            selectors.push(ColumnSelector::UnsignedInc(BalancedIncColumn::Carry {
-                width: log_k_chunk,
-            }));
-        }
         debug_assert_eq!(openings.len(), selectors.len());
         Ok(Self {
             openings,
@@ -739,19 +696,13 @@ impl<F: JoltField> SumcheckKernel<F> for OptimizedBooleanityCycleKernel<F> {
 pub(crate) mod testing {
     use jolt_claims::protocols::jolt::geometry::booleanity::BooleanityDimensions;
     use jolt_claims::protocols::jolt::geometry::ra::JoltRaPolynomialLayout;
-    use jolt_claims::protocols::jolt::{
-        JoltCommittedPolynomial, JoltOneHotConfig, JoltPolynomialId,
-    };
+    use jolt_claims::protocols::jolt::{JoltCommittedPolynomial, JoltPolynomialId};
     use jolt_field::Fr;
-    use jolt_program::execution::{
-        JoltProgram, OwnedTrace, RamAccess, RamRead, RamWrite, RegisterRead, RegisterState,
-        RegisterWrite, TraceOutput, TraceRow,
-    };
-    use jolt_program::preprocess::{
-        BytecodePreprocessing, JoltProgramPreprocessing, RAMPreprocessing,
-    };
-    use jolt_riscv::{JoltInstructionKind, JoltInstructionRow, NormalizedOperands, RV64IMAC_JOLT};
+    use jolt_wasm_ir::Reg;
     use jolt_witness::{JoltVmWitnessConfig, JoltVmWitnessInputs, JoltWitnessOracle, TraceBackend};
+    use std::sync::Arc;
+
+    use crate::optimized::testing::{empty_io, one_hot_config, word_address, TraceBuilder};
 
     /// Runs `f` against a trace backend whose rows exercise the one-hot
     /// sparsity structure: hot/cold bytecode cycles, hot/cold RAM cycles,
@@ -761,146 +712,25 @@ pub(crate) mod testing {
     pub(crate) fn with_booleanity_backend<R>(
         log_t: usize,
         log_k_chunk: u8,
-        f: impl FnOnce(&TraceBackend<OwnedTrace>, BooleanityDimensions) -> R,
+        f: impl FnOnce(&TraceBackend, BooleanityDimensions) -> R,
     ) -> R {
-        let instruction_a = JoltInstructionRow {
-            instruction_kind: JoltInstructionKind::LD,
-            address: 0x8000_0000,
-            operands: NormalizedOperands {
-                rd: Some(1),
-                rs1: Some(2),
-                rs2: None,
-                imm: 3,
-            },
-            virtual_sequence_remaining: None,
-            is_first_in_sequence: false,
-            is_compressed: false,
-        };
-        let instruction_b = JoltInstructionRow {
-            instruction_kind: JoltInstructionKind::SD,
-            address: 0x8000_0004,
-            operands: NormalizedOperands {
-                rd: None,
-                rs1: Some(1),
-                rs2: Some(3),
-                imm: 8,
-            },
-            ..instruction_a
-        };
-        let instruction_c = JoltInstructionRow {
-            instruction_kind: JoltInstructionKind::ADDI,
-            address: 0x8000_0008,
-            operands: NormalizedOperands {
-                rd: Some(1),
-                rs1: Some(2),
-                rs2: None,
-                imm: 3,
-            },
-            ..instruction_a
-        };
-        use std::sync::Arc;
-        let preprocessing = Arc::new(JoltProgramPreprocessing {
-            bytecode: BytecodePreprocessing::preprocess(
-                vec![instruction_a, instruction_b, instruction_c],
-                instruction_a.address as u64,
-                RV64IMAC_JOLT,
-            )
-            .unwrap(),
-            ram: RAMPreprocessing::default(),
-            memory_layout: Default::default(),
-            max_padded_trace_length: 4.max(1 << log_t),
-        });
-        let program = Arc::new(JoltProgram::default());
-        // Field mutation instead of struct literals: `TraceRow` grows a
-        // cfg-gated field under the `field-inline` feature, which a literal
-        // cannot spell portably from this crate.
-        let row = |instruction: Option<JoltInstructionRow>,
-                   registers: RegisterState,
-                   ram_access: RamAccess| {
-            let mut row = TraceRow::default();
-            if let Some(instruction) = instruction {
-                row.instruction = instruction;
-            }
-            row.registers = registers;
-            row.ram_access = ram_access;
-            row
-        };
-        let mut rows = vec![
-            // Hot bytecode, hot RAM, register activity.
-            row(
-                Some(instruction_a),
-                RegisterState {
-                    rs1: Some(RegisterRead {
-                        register: 2,
-                        value: 5,
-                    }),
-                    rd: Some(RegisterWrite {
-                        register: 1,
-                        pre_value: 0,
-                        post_value: 8,
-                    }),
-                    ..Default::default()
-                },
-                RamAccess::Read(RamRead {
-                    address: 0x8000_1000,
-                    value: 8,
-                }),
-            ),
-            // Hot bytecode (different PC / lookup index), hot RAM (write).
-            row(
-                Some(instruction_b),
-                RegisterState {
-                    rs1: Some(RegisterRead {
-                        register: 1,
-                        value: 8,
-                    }),
-                    rs2: Some(RegisterRead {
-                        register: 3,
-                        value: 11,
-                    }),
-                    ..Default::default()
-                },
-                RamAccess::Write(RamWrite {
-                    address: 0x8000_1008,
-                    pre_value: 7,
-                    post_value: 11,
-                }),
-            ),
-            // Cold bytecode and RAM.
-            row(None, RegisterState::default(), RamAccess::NoOp),
-            // Hot bytecode, cold RAM.
-            row(
-                Some(instruction_c),
-                RegisterState {
-                    rs1: Some(RegisterRead {
-                        register: 2,
-                        value: 5,
-                    }),
-                    rd: Some(RegisterWrite {
-                        register: 1,
-                        pre_value: 8,
-                        post_value: 11,
-                    }),
-                    ..Default::default()
-                },
-                RamAccess::NoOp,
-            ),
-        ];
-        rows.truncate(1 << log_t);
+        let mut builder = TraceBuilder::new();
+        builder.initial_word(word_address(3), 8);
+        builder.initial_word(word_address(4), 7);
+        // Hot bytecode, hot RAM, register activity.
+        builder.load(Reg::T1, word_address(3));
+        // Hot bytecode (different pc / lookup index), hot RAM (write).
+        builder.store(word_address(4), 11);
+        // Cold RAM.
+        builder.nop();
+        // Hot bytecode, cold RAM, register activity.
+        builder.register_op(Some(Reg::T1), Some(Reg::T0), None, 11);
+        let mut trace = builder.finish(4.max(1 << log_t));
+        trace.rows.truncate(1 << log_t);
 
-        let config = JoltVmWitnessConfig::new(
-            log_t,
-            64,
-            JoltOneHotConfig {
-                log_k_chunk,
-                lookups_ra_virtual_log_k_chunk: 16,
-            },
-        );
-        let inputs = JoltVmWitnessInputs::new(
-            &program,
-            &preprocessing,
-            TraceOutput::new(OwnedTrace::new(rows), Default::default(), None, None),
-        );
+        let config = JoltVmWitnessConfig::new(log_t, 64, one_hot_config(log_k_chunk));
+        let inputs =
+            JoltVmWitnessInputs::new(&trace.preprocessing, Arc::new(trace.rows), empty_io());
         let backend = TraceBackend::new(config, inputs);
 
         let probe = |family: fn(usize) -> JoltCommittedPolynomial| {
@@ -1000,8 +830,6 @@ mod tests {
         reference_address: Vec<Fr>,
         reference_cycle: Vec<Fr>,
     ) -> Booleanity<Fr> {
-        #[cfg(feature = "akita")]
-        let dimensions = LatticeBooleanityDimensions::new(dimensions).unwrap();
         Booleanity::new(dimensions, r_address, reference_address, reference_cycle)
     }
 

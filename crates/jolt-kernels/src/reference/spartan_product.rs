@@ -19,9 +19,8 @@ use std::collections::BTreeMap;
 
 use jolt_claims::protocols::jolt::geometry::dimensions::PRODUCT_UNISKIP_DOMAIN_SIZE;
 use jolt_claims::protocols::jolt::geometry::spartan::{
-    branch_flag_product, jump_flag_product, left_instruction_input_product, lookup_output_product,
-    next_is_noop_product, right_instruction_input_product, virtual_instruction_product,
-    write_lookup_output_to_rd_product,
+    branch_flag_product, left_instruction_input_product, lookup_output_product,
+    right_instruction_input_product,
 };
 use jolt_claims::protocols::jolt::{JoltDerivedId, SpartanProductVirtualizationPublic};
 use jolt_field::JoltField;
@@ -114,17 +113,9 @@ pub struct SpartanProductKernel<F: JoltField> {
     #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
     lookup_output: Vec<F>,
     #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
-    jump_flag: Vec<F>,
-    #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
     right_instruction_input: Vec<F>,
     #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
     branch_flag: Vec<F>,
-    #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
-    next_is_noop: Vec<F>,
-    #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
-    write_lookup_output_to_rd: Vec<F>,
-    #[cfg_attr(feature = "allocative", allocative(visit = jolt_poly::visit_scalars))]
-    virtual_instruction: Vec<F>,
 }
 
 impl<F: JoltField> SpartanProductKernel<F> {
@@ -138,12 +129,8 @@ impl<F: JoltField> SpartanProductKernel<F> {
             eq_cycle: eq_table(tau_low),
             left_instruction_input: dense_view(witness, left_instruction_input_product())?,
             lookup_output: dense_view(witness, lookup_output_product())?,
-            jump_flag: dense_view(witness, jump_flag_product())?,
             right_instruction_input: dense_view(witness, right_instruction_input_product())?,
             branch_flag: dense_view(witness, branch_flag_product())?,
-            next_is_noop: dense_view(witness, next_is_noop_product())?,
-            write_lookup_output_to_rd: dense_view(witness, write_lookup_output_to_rd_product())?,
-            virtual_instruction: dense_view(witness, virtual_instruction_product())?,
         })
     }
 
@@ -165,11 +152,9 @@ impl<F: JoltField> SpartanProductKernel<F> {
             let mut sum = F::zero();
             for j in 0..cycles {
                 let left = weights[0] * self.left_instruction_input[j]
-                    + weights[1] * self.lookup_output[j]
-                    + weights[2] * self.jump_flag[j];
-                let right = weights[0] * self.right_instruction_input[j]
-                    + weights[1] * self.branch_flag[j]
-                    + weights[2] * (F::one() - self.next_is_noop[j]);
+                    + weights[1] * self.lookup_output[j];
+                let right =
+                    weights[0] * self.right_instruction_input[j] + weights[1] * self.branch_flag[j];
                 sum += self.eq_cycle[j] * left * right;
             }
             *value = sum;
@@ -224,21 +209,11 @@ impl<F: JoltField> SpartanProductKernel<F> {
                 Polynomial::new(self.left_instruction_input),
             ),
             (lookup_output_product(), Polynomial::new(self.lookup_output)),
-            (jump_flag_product(), Polynomial::new(self.jump_flag)),
             (
                 right_instruction_input_product(),
                 Polynomial::new(self.right_instruction_input),
             ),
             (branch_flag_product(), Polynomial::new(self.branch_flag)),
-            (next_is_noop_product(), Polynomial::new(self.next_is_noop)),
-            (
-                write_lookup_output_to_rd_product(),
-                Polynomial::new(self.write_lookup_output_to_rd),
-            ),
-            (
-                virtual_instruction_product(),
-                Polynomial::new(self.virtual_instruction),
-            ),
         ]);
 
         Ok(Box::new(NaiveSumcheckProver::new(

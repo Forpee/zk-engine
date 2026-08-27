@@ -38,7 +38,6 @@ use std::collections::BTreeMap;
 use crate::ProverInputs;
 use jolt_claims::protocols::jolt::geometry::bytecode::{
     bytecode_ra, read_raf_stage_values, BytecodeReadRafDimensions, BytecodeReadRafStageValueInputs,
-    LATTICE_FUSED_INC_STAGES,
 };
 use jolt_claims::protocols::jolt::geometry::claim_reductions::bytecode::{
     bytecode_val_stage_opening, NUM_BYTECODE_VAL_STAGES,
@@ -87,7 +86,6 @@ pub struct BytecodeReadRafWitness {
 #[derive(Clone, Copy)]
 enum StageVal {
     Table(usize),
-    Complement(usize),
 }
 
 impl<F: JoltField> PrepareKernel<F, BytecodeReadRafAddressPhase<F>> for ReferenceBackend {
@@ -105,7 +103,7 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafAddressPhase<F>> for Referenc
         let program = witness.program_preprocessing();
         let stage_gammas = inputs.challenges.stage_gamma_powers();
         let stage_values = read_raf_stage_values(BytecodeReadRafStageValueInputs {
-            bytecode: &program.bytecode.bytecode,
+            bytecode: program.bytecode.rows(),
             register_read_write_point: &relation.register_read_write_point()
                 [..REGISTER_ADDRESS_BITS],
             register_val_evaluation_point: &relation.register_val_evaluation_point()
@@ -121,20 +119,12 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReadRafAddressPhase<F>> for Referenc
         let rows: Vec<BytecodeReadRafWitness> =
             collect_bundles(witness, 1 << relation.dimensions().log_t())?;
         let bytecode_indices: Vec<usize> = rows.iter().map(|row| row.bytecode_pc.0).collect();
-        // The packed fused stages' cycle factor: the per-cycle fused deltas,
-        // fetched exactly when the relation carries the consumer points.
-        let fused_values: Vec<F> = if relation.fused_inc_cycle_points().is_empty() {
-            Vec::new()
-        } else {
-            witness.oracle_table(JoltPolynomialId::Virtual(JoltVirtualPolynomial::FusedInc))?
-        };
         Ok(Box::new(BytecodeReadRafAddressKernel::new(
             relation,
             relation.dimensions(),
             stage_values,
             relation.stage_cycle_points(),
             relation.fused_inc_cycle_points(),
-            fused_values,
             bytecode_indices,
             relation.entry_bytecode_index(),
             inputs.challenges,
@@ -187,24 +177,17 @@ impl<F: JoltField> BytecodeReadRafAddressKernel<F> {
         stage_values: Vec<[F; NUM_BYTECODE_VAL_STAGES]>,
         stage_cycle_points: &[Vec<F>; BASE_STAGES],
         fused_cycle_points: &[Vec<F>],
-        fused_values: Vec<F>,
         bytecode_indices: Vec<usize>,
         entry_bytecode_index: usize,
         challenges: &BytecodeReadRafAddressPhaseChallenges<F>,
     ) -> Result<Self, KernelError<F>> {
-        // The packed (lattice) shape appends one store val stage and four
-        // fused-inc consumer stages; anything else is an unknown shape.
-        let (num_stages, lattice) = match (NUM_BYTECODE_VAL_STAGES, fused_cycle_points.len()) {
-            (5, 0) => (BASE_STAGES, false),
-            (6, LATTICE_FUSED_INC_STAGES) => (BASE_STAGES + LATTICE_FUSED_INC_STAGES, true),
-            _ => {
-                return Err(KernelError::InvariantViolation {
-                    reason:
-                        "the bytecode read-raf stage shape matches neither the base five-stage \
-                             fold nor the packed nine-stage fold",
-                })
-            }
-        };
+        // The five-stage fold is the only shape.
+        if NUM_BYTECODE_VAL_STAGES != BASE_STAGES || !fused_cycle_points.is_empty() {
+            return Err(KernelError::InvariantViolation {
+                reason: "the bytecode read-raf stage shape is not the five-stage fold",
+            });
+        }
+        let num_stages = BASE_STAGES;
         let addresses = 1usize << dimensions.log_k();
         let cycles = 1usize << dimensions.log_t();
         if stage_values.len() != addresses {
@@ -221,14 +204,7 @@ impl<F: JoltField> BytecodeReadRafAddressKernel<F> {
                 got: bytecode_indices.len(),
             });
         }
-        if lattice && fused_values.len() != cycles {
-            return Err(KernelError::TableSizeMismatch {
-                table: "fused increment values".to_owned(),
-                expected: cycles,
-                got: fused_values.len(),
-            });
-        }
-        for point in stage_cycle_points.iter().chain(fused_cycle_points) {
+        for point in stage_cycle_points {
             if point.len() != dimensions.log_t() {
                 return Err(KernelError::InvariantViolation {
                     reason: "bytecode stage cycle point has the wrong variable count",
@@ -247,28 +223,18 @@ impl<F: JoltField> BytecodeReadRafAddressKernel<F> {
             gamma_powers[i] = gamma_powers[i - 1] * gamma;
         }
 
-        // F_s pushforwards: one trace scan per stage; the fused stages weight
-        // each cycle's eq contribution by its fused delta.
-        let pushforward = |point: &[F], fused: bool| {
+        // F_s pushforwards: one trace scan per stage.
+        let pushforward = |point: &[F]| {
             let eq_cycle = eq_table(point);
             let mut table = vec![F::zero(); addresses];
             for (j, &pc) in bytecode_indices.iter().enumerate() {
-                if fused {
-                    table[pc] += eq_cycle[j] * fused_values[j];
-                } else {
-                    table[pc] += eq_cycle[j];
-                }
+                table[pc] += eq_cycle[j];
             }
             Polynomial::new(table)
         };
         let pushforwards: Vec<Polynomial<F>> = stage_cycle_points
             .iter()
-            .map(|point| pushforward(point, false))
-            .chain(
-                fused_cycle_points
-                    .iter()
-                    .map(|point| pushforward(point, true)),
-            )
+            .map(|point| pushforward(point))
             .collect();
 
         // The RAW stage-value tables; the RAF identity `Int(k) = k` binds as
@@ -280,17 +246,7 @@ impl<F: JoltField> BytecodeReadRafAddressKernel<F> {
         let values: Vec<Polynomial<F>> = (0..NUM_BYTECODE_VAL_STAGES)
             .map(|s| Polynomial::new(stage_values.iter().map(|row| row[s]).collect()))
             .collect();
-        // The fused RAM legs read the staged store column, the register legs
-        // its complement.
-        let mut stage_vals: Vec<StageVal> = (0..BASE_STAGES).map(StageVal::Table).collect();
-        if lattice {
-            stage_vals.extend([
-                StageVal::Table(BASE_STAGES),
-                StageVal::Table(BASE_STAGES),
-                StageVal::Complement(BASE_STAGES),
-                StageVal::Complement(BASE_STAGES),
-            ]);
-        }
+        let stage_vals: Vec<StageVal> = (0..BASE_STAGES).map(StageVal::Table).collect();
         let int_table = Polynomial::new((0..addresses).map(|k| F::from_u64(k as u64)).collect());
 
         let one_hot = |index: usize| {
@@ -334,7 +290,6 @@ impl<F: JoltField> BytecodeReadRafAddressKernel<F> {
     fn bound_stage_val(&self, stage: usize) -> F {
         match self.stage_vals[stage] {
             StageVal::Table(index) => self.values[index].evals()[0],
-            StageVal::Complement(index) => F::one() - self.values[index].evals()[0],
         }
     }
 }
@@ -366,7 +321,6 @@ impl<F: JoltField> ProveRounds<F> for BytecodeReadRafAddressKernel<F> {
                 for (s, stage_val) in self.stage_vals.iter().enumerate() {
                     let val_ext = match stage_val {
                         StageVal::Table(index) => ext(&self.values[*index], y),
-                        StageVal::Complement(index) => F::one() - ext(&self.values[*index], y),
                     };
                     sum += self.stage_weights[s]
                         * ext(&self.pushforwards[s], y)

@@ -46,18 +46,17 @@ use jolt_claims::protocols::jolt::geometry::dimensions::OUTER_UNISKIP_DOMAIN_SIZ
 use jolt_claims::protocols::jolt::geometry::spartan::{
     outer_opening, SpartanOuterDimensions, SPARTAN_OUTER_R1CS_INPUTS,
 };
-use jolt_claims::protocols::jolt::{
-    JoltDerivedId, JoltOpeningId, JoltPolynomialId, SpartanOuterPublic,
-};
+use jolt_claims::protocols::jolt::{JoltDerivedId, JoltOpeningId, SpartanOuterPublic};
 use jolt_claims::{InputClaims as _, OutputClaims as _};
-use jolt_field::signed::{S128, S192, S256, S64};
+use jolt_field::signed::{S192, S256, S64};
 use jolt_field::{Accumulator as _, JoltField, WithAccumulator};
 use jolt_poly::lagrange::{
     centered_lagrange_evals, centered_lagrange_kernel, interpolate_to_coeffs, poly_mul,
 };
 use jolt_poly::{BindingOrder, EqPolynomial, GruenSplitEqPolynomial, Polynomial, UnivariatePoly};
-use jolt_r1cs::constraints::jolt::{spartan_outer_constraints, spartan_outer_row_weights};
-use jolt_riscv::{CircuitFlags, InstructionFlags, JoltTraceRow as TraceRow};
+use jolt_r1cs::constraints::jolt::{
+    spartan_outer_constraints, spartan_outer_row_weights, SPARTAN_OUTER_SECOND_GROUP_ROW_COUNT,
+};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use jolt_utils::unsafe_allocate_zero_vec;
 use jolt_verifier::stages::relations::{
@@ -65,11 +64,11 @@ use jolt_verifier::stages::relations::{
     SumcheckOutputClaims, SumcheckOutputPoints,
 };
 use jolt_verifier::stages::stage1::outer_remainder::OuterRemainder;
+use jolt_wasm_ir::RowFlag;
 use jolt_witness::witnesses::{
-    lookup_values, Imm, LeftInstructionInput, LeftLookupOperand, LookupOutput,
-    NextIsFirstInSequence, NextIsVirtual, NextPc, NextUnexpandedPc, OpFlag, Pc, Product,
+    Flag, Imm, LeftInstructionInput, LeftLookupOperand, LookupOutput, NextPc, Pc, Product,
     RamAddress, RamReadValue, RamWriteValue, RdWriteValue, RightInstructionInput,
-    RightLookupOperand, Rs1Value, Rs2Value, ShouldBranch, ShouldJump, UnexpandedPc, WitnessEnv,
+    RightLookupOperand, Rs1Value, Rs2Value, ShouldBranch,
 };
 use jolt_witness::{JoltWitnessPlane, WitnessBundle, WitnessError};
 #[cfg(feature = "parallel")]
@@ -85,127 +84,81 @@ use crate::{
 };
 
 const DOMAIN: usize = OUTER_UNISKIP_DOMAIN_SIZE;
-const SECOND_GROUP_LEN: usize = DOMAIN - 1;
+const SECOND_GROUP_LEN: usize = SPARTAN_OUTER_SECOND_GROUP_ROW_COUNT;
 const EXTENDED_SIZE: usize = 2 * DOMAIN - 1;
 const EXTENDED_NODE_COUNT: usize = DOMAIN - 1;
 const DOMAIN_START: i64 = -((DOMAIN as i64 - 1) / 2);
 const EXTENDED_START: i64 = -((EXTENDED_SIZE as i64 - 1) / 2);
 
-#[derive(Clone, Copy, Debug)]
+/// The per-cycle Spartan outer witness: the 31 R1CS inputs as native small
+/// scalars, in [`SPARTAN_OUTER_R1CS_INPUTS`] order.
+#[derive(Clone, Copy, Debug, WitnessBundle)]
 struct SpartanOuterRow {
+    #[opening(LeftInstructionInput)]
     left_instruction_input: LeftInstructionInput,
+    #[opening(RightInstructionInput)]
     right_instruction_input: RightInstructionInput,
+    #[opening(Product)]
     product: Product,
-    should_branch: ShouldBranch,
+    #[opening(PC)]
     pc: Pc,
-    unexpanded_pc: UnexpandedPc,
+    #[opening(Imm)]
     imm: Imm,
+    #[opening(RamAddress)]
     ram_address: RamAddress,
+    #[opening(Rs1Value)]
     rs1_value: Rs1Value,
+    #[opening(Rs2Value)]
     rs2_value: Rs2Value,
+    #[opening(RdWriteValue)]
     rd_write_value: RdWriteValue,
+    #[opening(RamReadValue)]
     ram_read_value: RamReadValue,
+    #[opening(RamWriteValue)]
     ram_write_value: RamWriteValue,
+    #[opening(LeftLookupOperand)]
     left_lookup_operand: LeftLookupOperand,
+    #[opening(RightLookupOperand)]
     right_lookup_operand: RightLookupOperand,
-    next_unexpanded_pc: NextUnexpandedPc,
+    #[opening(NextPC)]
     next_pc: NextPc,
-    next_is_virtual: NextIsVirtual,
-    next_is_first_in_sequence: NextIsFirstInSequence,
+    #[opening(LookupOutput)]
     lookup_output: LookupOutput,
-    should_jump: ShouldJump,
-    add_operands: OpFlag,
-    subtract_operands: OpFlag,
-    multiply_operands: OpFlag,
-    load: OpFlag,
-    store: OpFlag,
-    jump: OpFlag,
-    write_lookup_output_to_rd: OpFlag,
-    virtual_instruction: OpFlag,
-    assert_flag: OpFlag,
-    do_not_update_unexpanded_pc: OpFlag,
-    advice: OpFlag,
-    is_compressed: OpFlag,
-    is_first_in_sequence: OpFlag,
-    is_last_in_sequence: OpFlag,
+    #[opening(ShouldBranch)]
+    should_branch: ShouldBranch,
+    #[opening(RowFlag(RowFlag::LeftIsRs1))]
+    left_is_rs1: Flag,
+    #[opening(RowFlag(RowFlag::RightIsRs2))]
+    right_is_rs2: Flag,
+    #[opening(RowFlag(RowFlag::RightIsImm))]
+    right_is_imm: Flag,
+    #[opening(RowFlag(RowFlag::AddOperands))]
+    add_operands: Flag,
+    #[opening(RowFlag(RowFlag::SubOperands))]
+    sub_operands: Flag,
+    #[opening(RowFlag(RowFlag::MulOperands))]
+    mul_operands: Flag,
+    #[opening(RowFlag(RowFlag::WriteLookupToRd))]
+    write_lookup_to_rd: Flag,
+    #[opening(RowFlag(RowFlag::Load))]
+    load: Flag,
+    #[opening(RowFlag(RowFlag::Store))]
+    store: Flag,
+    #[opening(RowFlag(RowFlag::Jump))]
+    jump: Flag,
+    #[opening(RowFlag(RowFlag::Branch))]
+    branch: Flag,
+    #[opening(RowFlag(RowFlag::Assert))]
+    assert_flag: Flag,
+    #[opening(RowFlag(RowFlag::Halt))]
+    halt: Flag,
+    #[opening(RowFlag(RowFlag::Trap))]
+    trap: Flag,
+    #[opening(RowFlag(RowFlag::Advice))]
+    advice: Flag,
 }
 
-impl WitnessBundle for SpartanOuterRow {
-    #[inline]
-    fn from_row(
-        row: &TraceRow,
-        next: Option<&TraceRow>,
-        _env: &WitnessEnv<'_>,
-    ) -> Result<Self, WitnessError> {
-        let circuit_flags = row.circuit_flags();
-        let instruction_flags = row.instruction_flags();
-        let (
-            (left_instruction_input, right_instruction_input),
-            (left_lookup_operand, right_lookup_operand),
-            lookup_output,
-        ) = lookup_values(row);
-        let next_flags = next.map(TraceRow::circuit_flags);
-        let flag = |flag| OpFlag(circuit_flags[flag]);
-
-        Ok(Self {
-            left_instruction_input: LeftInstructionInput(left_instruction_input),
-            right_instruction_input: RightInstructionInput(right_instruction_input),
-            product: Product(
-                S64::from_u64(left_instruction_input)
-                    .mul_trunc::<2, 2>(&S128::from_i128(right_instruction_input)),
-            ),
-            should_branch: ShouldBranch(
-                instruction_flags[InstructionFlags::Branch] && lookup_output == 1,
-            ),
-            pc: Pc(row.pc()),
-            unexpanded_pc: UnexpandedPc(row.unexpanded_pc()),
-            imm: Imm(row.imm()),
-            ram_address: RamAddress(row.ram_address()),
-            rs1_value: Rs1Value(row.rs1_value()),
-            rs2_value: Rs2Value(row.rs2_value()),
-            rd_write_value: RdWriteValue(row.rd_write_value()),
-            ram_read_value: RamReadValue(row.ram_read_value()),
-            ram_write_value: RamWriteValue(row.ram_write_value()),
-            left_lookup_operand: LeftLookupOperand(left_lookup_operand),
-            right_lookup_operand: RightLookupOperand(right_lookup_operand),
-            next_unexpanded_pc: NextUnexpandedPc(next.map_or(0, TraceRow::unexpanded_pc)),
-            next_pc: NextPc(next.map_or(0, TraceRow::pc)),
-            next_is_virtual: NextIsVirtual(
-                next_flags.is_some_and(|flags| flags[CircuitFlags::VirtualInstruction]),
-            ),
-            next_is_first_in_sequence: NextIsFirstInSequence(
-                next_flags.is_some_and(|flags| flags[CircuitFlags::IsFirstInSequence]),
-            ),
-            lookup_output: LookupOutput(lookup_output),
-            should_jump: ShouldJump(
-                circuit_flags[CircuitFlags::Jump] && !next.is_some_and(|row| row.is_noop()),
-            ),
-            add_operands: flag(CircuitFlags::AddOperands),
-            subtract_operands: flag(CircuitFlags::SubtractOperands),
-            multiply_operands: flag(CircuitFlags::MultiplyOperands),
-            load: flag(CircuitFlags::Load),
-            store: flag(CircuitFlags::Store),
-            jump: flag(CircuitFlags::Jump),
-            write_lookup_output_to_rd: flag(CircuitFlags::WriteLookupOutputToRD),
-            virtual_instruction: flag(CircuitFlags::VirtualInstruction),
-            assert_flag: flag(CircuitFlags::Assert),
-            do_not_update_unexpanded_pc: flag(CircuitFlags::DoNotUpdateUnexpandedPC),
-            advice: flag(CircuitFlags::Advice),
-            is_compressed: flag(CircuitFlags::IsCompressed),
-            is_first_in_sequence: flag(CircuitFlags::IsFirstInSequence),
-            is_last_in_sequence: flag(CircuitFlags::IsLastInSequence),
-        })
-    }
-
-    fn annotated_ids() -> Vec<JoltPolynomialId> {
-        SPARTAN_OUTER_R1CS_INPUTS
-            .into_iter()
-            .map(JoltPolynomialId::Virtual)
-            .collect()
-    }
-}
-
-/// One cycle's integer values of the 19 eq-conditional rows, split into the
+/// One cycle's integer values of the 22 eq-conditional rows, split into the
 /// two uni-skip stream groups (A-side guards as `i64`, B-side magnitudes as
 /// `S192` — wide enough for the `RightLookupOperand`-bearing rows, whose
 /// values reach ±2^130).
@@ -216,89 +169,87 @@ struct RowGroupValues {
     b_second: [S192; SECOND_GROUP_LEN],
 }
 
-/// Evaluate the 19 constraint rows at one cycle with exact integer
-/// arithmetic. Formulas transcribe `jolt-r1cs`'s `rv64_eq_constraint_rows`
+/// Evaluate the 22 constraint rows at one cycle with exact integer
+/// arithmetic. Formulas transcribe `jolt-r1cs`'s `wasm_eq_constraint_rows`
 /// verbatim (matrix semantics, not satisfied-witness shortcuts), grouped as
-/// `SPARTAN_OUTER_{FIRST,SECOND}_GROUP_ROWS` orders them.
+/// `SPARTAN_OUTER_{FIRST,SECOND}_GROUP_ROWS` orders them (rows `0..=10`,
+/// then `11..=21`).
 fn row_group_values(row: &SpartanOuterRow) -> RowGroupValues {
     let flag = |value: bool| i64::from(value);
+    let left_is_rs1 = flag(row.left_is_rs1.0);
+    let right_is_rs2 = flag(row.right_is_rs2.0);
+    let right_is_imm = flag(row.right_is_imm.0);
     let load = flag(row.load.0);
     let store = flag(row.store.0);
     let add = flag(row.add_operands.0);
-    let sub = flag(row.subtract_operands.0);
-    let mul = flag(row.multiply_operands.0);
+    let sub = flag(row.sub_operands.0);
+    let mul = flag(row.mul_operands.0);
     let jump = flag(row.jump.0);
+    let halt = flag(row.halt.0);
     let should_branch = flag(row.should_branch.0);
 
-    // Rows 1, 2, 3, 4, 5, 6, 11, 14, 17, 18.
     let a_first = [
+        left_is_rs1,
+        1 - left_is_rs1,
+        right_is_rs2,
+        right_is_imm,
+        1 - right_is_rs2 - right_is_imm,
+        load + store,
         1 - load - store,
         load,
         load,
         store,
         add + sub + mul,
-        1 - add - sub - mul,
-        flag(row.assert_flag.0),
-        flag(row.should_jump.0),
-        flag(row.virtual_instruction.0) - flag(row.is_last_in_sequence.0),
-        flag(row.next_is_virtual.0) - flag(row.next_is_first_in_sequence.0),
     ];
-    // Rows 0, 7, 8, 9, 10, 12, 13, 15, 16.
     let a_second = [
-        load + store,
+        1 - add - sub - mul,
         add,
         sub,
         mul,
         1 - add - sub - mul - flag(row.advice.0),
-        flag(row.write_lookup_output_to_rd.0),
+        flag(row.assert_flag.0),
+        flag(row.write_lookup_to_rd.0),
         jump,
         should_branch,
-        1 - should_branch - jump,
+        halt,
+        1 - should_branch - jump - halt,
     ];
 
-    let diff = |a: u64, b: u64| S192::from_i128(i128::from(a) - i128::from(b));
+    let wide = |value: i128| S192::from_i128(value);
+    let diff = |a: u64, b: u64| wide(i128::from(a) - i128::from(b));
+    let left_input = i128::from(row.left_instruction_input.0);
+    let right_input = i128::from(row.right_instruction_input.0);
+    let imm = wide(row.imm.0);
+    let right_lookup = S192::from_u128(row.right_lookup_operand.0);
+    let next_pc = i128::from(row.next_pc.0);
+    let pc = i128::from(row.pc.0);
+    let lookup_output = i128::from(row.lookup_output.0);
+    let two_pow_64 = S192::new([0, 1, 0], true);
     let b_first = [
-        S192::from_u64(row.ram_address.0),
+        wide(left_input - i128::from(row.rs1_value.0)),
+        wide(left_input),
+        wide(right_input - i128::from(row.rs2_value.0)),
+        wide(right_input) - imm,
+        wide(right_input),
+        wide(i128::from(row.ram_address.0) - i128::from(row.rs1_value.0)) - imm,
+        wide(i128::from(row.ram_address.0)),
         diff(row.ram_read_value.0, row.ram_write_value.0),
         diff(row.ram_read_value.0, row.rd_write_value.0),
         diff(row.rs2_value.0, row.ram_write_value.0),
-        S192::from_u64(row.left_lookup_operand.0),
-        diff(row.left_lookup_operand.0, row.left_instruction_input.0),
-        S192::from_i128(i128::from(row.lookup_output.0) - 1),
-        diff(row.next_unexpanded_pc.0, row.lookup_output.0),
-        S192::from_i128(i128::from(row.next_pc.0) - i128::from(row.pc.0) - 1),
-        S192::from_i64(1 - flag(row.do_not_update_unexpanded_pc.0)),
+        wide(i128::from(row.left_lookup_operand.0)),
     ];
-
-    let flag_i128 = |value: bool| i128::from(value);
-    let right_lookup = S192::from_u128(row.right_lookup_operand.0);
-    let right_input = S192::from_i128(row.right_instruction_input.0);
-    let left_input = S192::from_u64(row.left_instruction_input.0);
-    let imm = S192::from_i128(row.imm.0);
-    let product_limbs = row.product.0.magnitude_limbs();
-    let product = S192::new(
-        [product_limbs[0], product_limbs[1], 0],
-        row.product.0.is_positive,
-    );
-    let two_pow_64 = S192::new([0, 1, 0], true);
     let b_second = [
-        S192::from_i128(i128::from(row.ram_address.0) - i128::from(row.rs1_value.0)) - imm,
-        right_lookup - left_input - right_input,
-        right_lookup - left_input + right_input - two_pow_64,
-        right_lookup - product,
-        right_lookup - right_input,
-        S192::from_i128(i128::from(row.rd_write_value.0) - i128::from(row.lookup_output.0)),
-        S192::from_i128(
-            i128::from(row.rd_write_value.0) - i128::from(row.unexpanded_pc.0) - 4
-                + 2 * flag_i128(row.is_compressed.0),
-        ),
-        S192::from_i128(i128::from(row.next_unexpanded_pc.0) - i128::from(row.unexpanded_pc.0))
-            - imm,
-        S192::from_i128(
-            i128::from(row.next_unexpanded_pc.0) - i128::from(row.unexpanded_pc.0) - 4
-                + 4 * flag_i128(row.do_not_update_unexpanded_pc.0)
-                + 2 * flag_i128(row.is_compressed.0),
-        ),
+        diff(row.left_lookup_operand.0, row.left_instruction_input.0),
+        right_lookup - wide(left_input + right_input),
+        right_lookup - wide(left_input) + wide(right_input) - two_pow_64,
+        right_lookup - S192::from_u128(row.product.0),
+        right_lookup - wide(right_input),
+        wide(lookup_output - 1),
+        wide(i128::from(row.rd_write_value.0) - lookup_output),
+        wide(next_pc - lookup_output),
+        wide(next_pc) - imm,
+        wide(next_pc - pc),
+        wide(next_pc - pc - 1),
     ];
 
     RowGroupValues {
@@ -645,7 +596,7 @@ impl<F: JoltField> OuterRemainderKernel<F> {
             Some(kernel),
         );
 
-        let dimensions = SpartanOuterDimensions::rv64(log_t);
+        let dimensions = SpartanOuterDimensions::wasm(log_t);
         let opening_ids: Vec<JoltOpeningId> = dimensions
             .variables()
             .iter()
@@ -765,7 +716,7 @@ impl<F: JoltField> OuterRemainderKernel<F> {
         self.pending_endpoints = None;
     }
 
-    /// The 35 produced opening values at the bound cycle point: one
+    /// The 31 produced opening values at the bound cycle point: one
     /// eq-weighted walk over the typed rows (`compute_claimed_inputs`),
     /// mixed-width accumulators per input.
     #[tracing::instrument(skip_all, name = "SpartanOuter::claimed_inputs")]
@@ -802,7 +753,7 @@ impl<F: JoltField> OuterRemainderKernel<F> {
     }
 }
 
-const VARIABLE_COUNT: usize = 35;
+const VARIABLE_COUNT: usize = SPARTAN_OUTER_R1CS_INPUTS.len();
 
 /// Which canonical inputs are boolean-valued: those stay on the small-scalar
 /// accumulator, whose 5-limb (320-bit) window only has headroom when the
@@ -811,11 +762,8 @@ const VARIABLE_COUNT: usize = 35;
 /// at ~2^318 — so they go through the signed-product path instead.
 const BOOLEAN_INPUT: [bool; VARIABLE_COUNT] = {
     let mut mask = [false; VARIABLE_COUNT];
-    mask[3] = true; // ShouldBranch
-    mask[17] = true; // NextIsVirtual
-    mask[18] = true; // NextIsFirstInSequence
-    mask[20] = true; // ShouldJump
-    let mut flag = 21; // the 14 circuit flags
+    mask[15] = true; // ShouldBranch
+    let mut flag = 16; // the row flags
     while flag < VARIABLE_COUNT {
         mask[flag] = true;
         flag += 1;
@@ -845,24 +793,29 @@ impl<F: JoltField> ClaimAccumulator<F> {
         let mut flag = |index: usize, value: bool| {
             self.small[index].fmadd_u64(weight, u64::from(value));
         };
-        flag(3, row.should_branch.0);
-        flag(17, row.next_is_virtual.0);
-        flag(18, row.next_is_first_in_sequence.0);
-        flag(20, row.should_jump.0);
-        flag(21, row.add_operands.0);
-        flag(22, row.subtract_operands.0);
-        flag(23, row.multiply_operands.0);
-        flag(24, row.load.0);
-        flag(25, row.store.0);
-        flag(26, row.jump.0);
-        flag(27, row.write_lookup_output_to_rd.0);
-        flag(28, row.virtual_instruction.0);
-        flag(29, row.assert_flag.0);
-        flag(30, row.do_not_update_unexpanded_pc.0);
-        flag(31, row.advice.0);
-        flag(32, row.is_compressed.0);
-        flag(33, row.is_first_in_sequence.0);
-        flag(34, row.is_last_in_sequence.0);
+        flag(15, row.should_branch.0);
+        for (index, value) in [
+            row.left_is_rs1.0,
+            row.right_is_rs2.0,
+            row.right_is_imm.0,
+            row.add_operands.0,
+            row.sub_operands.0,
+            row.mul_operands.0,
+            row.write_lookup_to_rd.0,
+            row.load.0,
+            row.store.0,
+            row.jump.0,
+            row.branch.0,
+            row.assert_flag.0,
+            row.halt.0,
+            row.trap.0,
+            row.advice.0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            flag(16 + index, value);
+        }
 
         let mut word = |index: usize, magnitude: u128, is_positive: bool| {
             if let Ok(magnitude) = u64::try_from(magnitude) {
@@ -878,32 +831,20 @@ impl<F: JoltField> ClaimAccumulator<F> {
             }
         };
         word(0, u128::from(row.left_instruction_input.0), true);
-        word(4, u128::from(row.pc.0), true);
-        word(5, u128::from(row.unexpanded_pc.0), true);
-        word(7, u128::from(row.ram_address.0), true);
-        word(8, u128::from(row.rs1_value.0), true);
-        word(9, u128::from(row.rs2_value.0), true);
-        word(10, u128::from(row.rd_write_value.0), true);
-        word(11, u128::from(row.ram_read_value.0), true);
-        word(12, u128::from(row.ram_write_value.0), true);
-        word(13, u128::from(row.left_lookup_operand.0), true);
-        word(15, u128::from(row.next_unexpanded_pc.0), true);
-        word(16, u128::from(row.next_pc.0), true);
-        word(19, u128::from(row.lookup_output.0), true);
-
-        let product_limbs = row.product.0.magnitude_limbs();
-        word(
-            1,
-            row.right_instruction_input.0.unsigned_abs(),
-            row.right_instruction_input.0 >= 0,
-        );
-        word(
-            2,
-            (u128::from(product_limbs[1]) << 64) | u128::from(product_limbs[0]),
-            row.product.0.is_positive,
-        );
-        word(6, row.imm.0.unsigned_abs(), row.imm.0 >= 0);
-        word(14, row.right_lookup_operand.0, true);
+        word(1, u128::from(row.right_instruction_input.0), true);
+        word(2, row.product.0, true);
+        word(3, u128::from(row.pc.0), true);
+        word(4, row.imm.0.unsigned_abs(), row.imm.0 >= 0);
+        word(5, u128::from(row.ram_address.0), true);
+        word(6, u128::from(row.rs1_value.0), true);
+        word(7, u128::from(row.rs2_value.0), true);
+        word(8, u128::from(row.rd_write_value.0), true);
+        word(9, u128::from(row.ram_read_value.0), true);
+        word(10, u128::from(row.ram_write_value.0), true);
+        word(11, u128::from(row.left_lookup_operand.0), true);
+        word(12, row.right_lookup_operand.0, true);
+        word(13, u128::from(row.next_pc.0), true);
+        word(14, u128::from(row.lookup_output.0), true);
     }
 
     fn finish(self) -> Vec<F> {
@@ -1036,12 +977,11 @@ mod tests {
     use jolt_claims::protocols::jolt::geometry::spartan::SPARTAN_OUTER_R1CS_INPUTS;
     use jolt_claims::protocols::jolt::JoltPolynomialId;
     use jolt_claims::NoChallenges;
-    use jolt_field::signed::S128;
     use jolt_field::{Fr, Ring};
     use jolt_verifier::stages::stage1::outer_remainder::{
         outer_remainder_input_values_from_uniskip_output, OuterRemainderInputClaims,
     };
-    use jolt_witness::testing::with_sample_backend;
+    use jolt_witness::testing::{with_sample_backend, SAMPLE_CYCLES};
     use jolt_witness::witnesses::ToField;
     use jolt_witness::{BundleSource, FixedBackend, JoltWitnessOracle, PolynomialEncoding, Shape};
 
@@ -1057,44 +997,40 @@ mod tests {
             0 => row.left_instruction_input.to_field(),
             1 => row.right_instruction_input.to_field(),
             2 => row.product.to_field(),
-            3 => row.should_branch.to_field(),
-            4 => row.pc.to_field(),
-            5 => row.unexpanded_pc.to_field(),
-            6 => row.imm.to_field(),
-            7 => row.ram_address.to_field(),
-            8 => row.rs1_value.to_field(),
-            9 => row.rs2_value.to_field(),
-            10 => row.rd_write_value.to_field(),
-            11 => row.ram_read_value.to_field(),
-            12 => row.ram_write_value.to_field(),
-            13 => row.left_lookup_operand.to_field(),
-            14 => row.right_lookup_operand.to_field(),
-            15 => row.next_unexpanded_pc.to_field(),
-            16 => row.next_pc.to_field(),
-            17 => row.next_is_virtual.to_field(),
-            18 => row.next_is_first_in_sequence.to_field(),
-            19 => row.lookup_output.to_field(),
-            20 => row.should_jump.to_field(),
-            21 => row.add_operands.to_field(),
-            22 => row.subtract_operands.to_field(),
-            23 => row.multiply_operands.to_field(),
-            24 => row.load.to_field(),
-            25 => row.store.to_field(),
-            26 => row.jump.to_field(),
-            27 => row.write_lookup_output_to_rd.to_field(),
-            28 => row.virtual_instruction.to_field(),
-            29 => row.assert_flag.to_field(),
-            30 => row.do_not_update_unexpanded_pc.to_field(),
-            31 => row.advice.to_field(),
-            32 => row.is_compressed.to_field(),
-            33 => row.is_first_in_sequence.to_field(),
-            34 => row.is_last_in_sequence.to_field(),
-            _ => unreachable!("35 canonical R1CS inputs"),
+            3 => row.pc.to_field(),
+            4 => row.imm.to_field(),
+            5 => row.ram_address.to_field(),
+            6 => row.rs1_value.to_field(),
+            7 => row.rs2_value.to_field(),
+            8 => row.rd_write_value.to_field(),
+            9 => row.ram_read_value.to_field(),
+            10 => row.ram_write_value.to_field(),
+            11 => row.left_lookup_operand.to_field(),
+            12 => row.right_lookup_operand.to_field(),
+            13 => row.next_pc.to_field(),
+            14 => row.lookup_output.to_field(),
+            15 => row.should_branch.to_field(),
+            16 => row.left_is_rs1.to_field(),
+            17 => row.right_is_rs2.to_field(),
+            18 => row.right_is_imm.to_field(),
+            19 => row.add_operands.to_field(),
+            20 => row.sub_operands.to_field(),
+            21 => row.mul_operands.to_field(),
+            22 => row.write_lookup_to_rd.to_field(),
+            23 => row.load.to_field(),
+            24 => row.store.to_field(),
+            25 => row.jump.to_field(),
+            26 => row.branch.to_field(),
+            27 => row.assert_flag.to_field(),
+            28 => row.halt.to_field(),
+            29 => row.trap.to_field(),
+            30 => row.advice.to_field(),
+            _ => unreachable!("31 canonical R1CS inputs"),
         }
     }
 
-    /// Structured pseudo-random rows: full-range `u64`s, mixed-sign `i128`s,
-    /// two-limb `u128`/`S128` values (both wide B-row paths), diverse flags.
+    /// Structured pseudo-random rows: full-range `u64`s, a mixed-sign `i128`
+    /// immediate, two-limb `u128` values (both wide B-row paths), diverse flags.
     /// No satisfying-witness structure — parity must hold pointwise on any
     /// witness.
     fn synthetic_rows(log_t: usize, seed: u64) -> Vec<SpartanOuterRow> {
@@ -1126,11 +1062,9 @@ mod tests {
                 };
                 SpartanOuterRow {
                     left_instruction_input: LeftInstructionInput(next()),
-                    right_instruction_input: RightInstructionInput(signed(next())),
-                    product: Product(S128::new([next() | 1, next()], next() & 1 == 1)),
-                    should_branch: ShouldBranch(bit()),
+                    right_instruction_input: RightInstructionInput(next()),
+                    product: Product(wide(next() | 1, next())),
                     pc: Pc(next() >> 20),
-                    unexpanded_pc: UnexpandedPc(next()),
                     imm: Imm(signed(next()) >> 40),
                     ram_address: RamAddress(next()),
                     rs1_value: Rs1Value(next()),
@@ -1140,26 +1074,24 @@ mod tests {
                     ram_write_value: RamWriteValue(next()),
                     left_lookup_operand: LeftLookupOperand(next()),
                     right_lookup_operand: RightLookupOperand(wide(next(), next())),
-                    next_unexpanded_pc: NextUnexpandedPc(next()),
                     next_pc: NextPc(next() >> 20),
-                    next_is_virtual: NextIsVirtual(bit()),
-                    next_is_first_in_sequence: NextIsFirstInSequence(bit()),
                     lookup_output: LookupOutput(next()),
-                    should_jump: ShouldJump(bit()),
-                    add_operands: OpFlag(bit()),
-                    subtract_operands: OpFlag(bit()),
-                    multiply_operands: OpFlag(bit()),
-                    load: OpFlag(bit()),
-                    store: OpFlag(bit()),
-                    jump: OpFlag(bit()),
-                    write_lookup_output_to_rd: OpFlag(bit()),
-                    virtual_instruction: OpFlag(bit()),
-                    assert_flag: OpFlag(bit()),
-                    do_not_update_unexpanded_pc: OpFlag(bit()),
-                    advice: OpFlag(bit()),
-                    is_compressed: OpFlag(bit()),
-                    is_first_in_sequence: OpFlag(bit()),
-                    is_last_in_sequence: OpFlag(bit()),
+                    should_branch: ShouldBranch(bit()),
+                    left_is_rs1: Flag(bit()),
+                    right_is_rs2: Flag(bit()),
+                    right_is_imm: Flag(bit()),
+                    add_operands: Flag(bit()),
+                    sub_operands: Flag(bit()),
+                    mul_operands: Flag(bit()),
+                    write_lookup_to_rd: Flag(bit()),
+                    load: Flag(bit()),
+                    store: Flag(bit()),
+                    jump: Flag(bit()),
+                    branch: Flag(bit()),
+                    assert_flag: Flag(bit()),
+                    halt: Flag(bit()),
+                    trap: Flag(bit()),
+                    advice: Flag(bit()),
                 }
             })
             .collect()
@@ -1252,7 +1184,7 @@ mod tests {
 
         let r0 = Fr::from_u64(40961 + seed);
         let input_claim = true_input_claim(&rows, &tau, r0, log_t);
-        let relation = OuterRemainder::new(SpartanOuterDimensions::rv64(log_t), tau.clone(), r0);
+        let relation = OuterRemainder::new(SpartanOuterDimensions::wasm(log_t), tau.clone(), r0);
         let claims = outer_remainder_input_values_from_uniskip_output(input_claim);
         let points = OuterRemainderInputClaims::<Vec<Fr>>::default();
         let no_challenges = NoChallenges::<Fr>::default();
@@ -1339,7 +1271,7 @@ mod tests {
     #[test]
     fn sample_trace_parity_through_the_trait_path() {
         with_sample_backend(|backend| {
-            let log_t = 2usize;
+            let log_t = SAMPLE_CYCLES.ilog2() as usize;
             let tau: Vec<Fr> = (0..log_t + 2)
                 .map(|i| Fr::from_u64(29 + 13 * i as u64))
                 .collect();
@@ -1389,7 +1321,7 @@ mod tests {
             let input_claim = true_input_claim(&rows, &tau, r0, log_t);
 
             let relation =
-                OuterRemainder::new(SpartanOuterDimensions::rv64(log_t), tau.clone(), r0);
+                OuterRemainder::new(SpartanOuterDimensions::wasm(log_t), tau.clone(), r0);
             let claims = outer_remainder_input_values_from_uniskip_output(input_claim);
             let points = OuterRemainderInputClaims::<Vec<Fr>>::default();
             let no_challenges = NoChallenges::<Fr>::default();
@@ -1460,7 +1392,7 @@ mod tests {
 
     /// The typed bundle's columns equal the oracle tables the reference
     /// kernel materializes — the two witness paths meeting at the shared
-    /// `Extract` impls, for all 35 R1CS inputs.
+    /// `Extract` impls, for all 31 R1CS inputs.
     #[test]
     fn bundle_columns_match_oracle_tables() {
         with_sample_backend(|backend| {

@@ -18,6 +18,8 @@ pub mod row;
 
 pub use error::{ExecutionError, Trap};
 pub use jolt_wasm_ir::row::{Lookup, RowFlag, RowFlags, RowModel, RowSpec};
-pub use machine::{Execution, Machine, RamAccess, Record, RegisterRead, RegisterWrite};
+pub use machine::{
+    Execution, Machine, RamAccess, RamRead, RamWrite, Record, RegisterRead, RegisterWrite,
+};
 pub use memory::Memory;
 pub use row::{check_record, RowViolation};

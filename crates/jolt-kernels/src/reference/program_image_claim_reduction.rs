@@ -38,7 +38,7 @@ impl<F: JoltField> PrepareKernel<F, ProgramImageReductionCyclePhase<F>> for Refe
             layout,
             inputs.relation.r_addr_rw(),
             layout.start_index(),
-            &program.ram.bytecode_words,
+            &program.program_image().words,
         )?))
     }
 }

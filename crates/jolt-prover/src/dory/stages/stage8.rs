@@ -29,7 +29,6 @@ use jolt_kernels::committed_program::{
     build_committed_bytecode_chunk_coeffs, program_image_words_padded,
 };
 use jolt_kernels::{CommitmentGrid, JoltBackend, KernelError, ProofSession};
-use jolt_lookup_tables::XLEN as RISCV_XLEN;
 #[cfg(not(feature = "zk"))]
 use jolt_openings::BatchOpeningScheme;
 #[cfg(feature = "zk")]
@@ -45,6 +44,7 @@ use jolt_verifier::stages::stage6b::outputs::Stage6bClearOutput;
 use jolt_verifier::stages::stage7::outputs::Stage7ClearOutput;
 use jolt_verifier::stages::stage8::{batch_entries, precommitted_final_openings};
 use jolt_verifier::{CheckedInputs, VerifierError};
+use jolt_wasm_tables::XLEN;
 use jolt_witness::JoltWitnessPlane;
 
 use crate::{CommittedProgramCandidates, JoltProverPreprocessing, ProverConfig, ProverError};
@@ -90,7 +90,7 @@ where
     let precommitted = &checked.precommitted;
     let formula_dimensions = JoltFormulaDimensions::try_from(config.one_hot_config.dimensions(
         log_t,
-        2 * RISCV_XLEN,
+        2 * XLEN,
         preprocessing.verifier.program.bytecode_len(),
         checked.ram_K,
     ))
@@ -172,12 +172,8 @@ where
     let order =
         final_opening_polynomial_order(layout, include_trusted, include_untrusted, chunk_count);
     let grid = CommitmentGrid {
-        total_vars: config.commitment_total_vars(
-            preprocessing.verifier.program.memory_layout(),
-            include_trusted,
-            include_untrusted,
-            CommittedProgramCandidates::from_schedule(precommitted),
-        ),
+        total_vars: config
+            .commitment_total_vars(CommittedProgramCandidates::from_schedule(precommitted)),
         log_t,
         log_k_chunk: config.one_hot_config.committed_chunk_bits(),
         order: config.trace_polynomial_order,
@@ -197,7 +193,7 @@ where
                 reason: "full program preprocessing is unavailable",
             })?;
         let chunk_coeffs = build_committed_bytecode_chunk_coeffs::<F>(
-            &program.bytecode.bytecode,
+            program.bytecode.rows(),
             bytecode_layout.chunk_count(),
             bytecode_layout.trace_order(),
         )?;
@@ -205,7 +201,7 @@ where
             let _ =
                 precommitted_tables.insert(JoltCommittedPolynomial::BytecodeChunk(index), coeffs);
         }
-        let image_words = program_image_words_padded(&program.ram.bytecode_words);
+        let image_words = program_image_words_padded(&program.program_image().words);
         let _ = precommitted_tables.insert(
             JoltCommittedPolynomial::ProgramImageInit,
             image_words.into_iter().map(F::from_u64).collect(),

@@ -1,19 +1,16 @@
 //! Shared parity-test support for the registers kernel family.
 
-use jolt_claims::protocols::jolt::{JoltChallengeId, JoltOneHotConfig};
+use jolt_claims::protocols::jolt::JoltChallengeId;
 use jolt_claims::{InputClaims, OutputClaims, SumcheckChallenges};
 use jolt_field::{Fr, Ring};
-use jolt_program::execution::{
-    JoltProgram, OwnedTrace, RegisterRead, RegisterState, RegisterWrite, TraceOutput, TraceRow,
-};
-use jolt_program::preprocess::{BytecodePreprocessing, JoltProgramPreprocessing, RAMPreprocessing};
-use jolt_riscv::{JoltInstructionKind, JoltInstructionRow, NormalizedOperands, RV64IMAC_JOLT};
 use jolt_verifier::stages::relations::{
     ConcreteSumcheck, ConcreteSumcheckChallenges, SumcheckInputClaims, SumcheckInputPoints,
     SumcheckOutputClaims,
 };
-use jolt_witness::{JoltVmWitnessConfig, JoltVmWitnessInputs, JoltWitnessPlane, TraceBackend};
+use jolt_wasm_ir::Reg;
+use jolt_witness::{JoltWitnessPlane, TraceBackend};
 
+use crate::optimized::testing::{empty_io, with_trace_plane, TraceBuilder};
 use crate::reference::ReferenceBackend;
 use crate::{PrepareKernel, ProofSession, ProverInputs};
 
@@ -35,108 +32,42 @@ pub(crate) fn challenge_sequence(len: usize, seed: u64) -> Vec<Fr> {
 /// state, writes advance it, so every witness identity the sumchecks
 /// assume holds by construction.
 pub(crate) struct TraceFixture {
-    rows: Vec<TraceRow>,
-    state: [u64; 128],
+    builder: TraceBuilder,
     counter: u64,
 }
 
 impl TraceFixture {
     pub(crate) fn new() -> Self {
         Self {
-            rows: Vec::new(),
-            state: [0; 128],
+            builder: TraceBuilder::new(),
             counter: 0xDEAD_BEEF_0BAD_F00D,
         }
     }
 
     pub(crate) fn noop(&mut self) {
-        self.rows.push(TraceRow::default());
+        self.builder.nop();
     }
 
     /// One cycle touching the given operands; the write value is a fresh
     /// pseudo-random u64.
     pub(crate) fn op(&mut self, rd: Option<u8>, rs1: Option<u8>, rs2: Option<u8>) {
-        let read = |state: &[u64; 128], register: Option<u8>| {
-            register.map(|register| RegisterRead {
-                register,
-                value: state[register as usize],
-            })
-        };
-        let registers = RegisterState {
-            rs1: read(&self.state, rs1),
-            rs2: read(&self.state, rs2),
-            rd: rd.map(|register| {
-                self.counter = self
-                    .counter
-                    .wrapping_mul(6_364_136_223_846_793_005)
-                    .wrapping_add(1_442_695_040_888_963_407);
-                let pre_value = self.state[register as usize];
-                let post_value = self.counter;
-                self.state[register as usize] = post_value;
-                RegisterWrite {
-                    register,
-                    pre_value,
-                    post_value,
-                }
-            }),
-        };
-        let instruction = JoltInstructionRow {
-            instruction_kind: JoltInstructionKind::ADDI,
-            address: 0x8000_0000 + 4 * self.rows.len(),
-            operands: NormalizedOperands {
-                rd,
-                rs1,
-                rs2,
-                imm: 3,
-            },
-            virtual_sequence_remaining: None,
-            is_first_in_sequence: false,
-            is_compressed: false,
-        };
-        self.rows.push(TraceRow {
-            instruction,
-            registers,
-            ..TraceRow::default()
-        });
+        self.counter = self
+            .counter
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let register = |id: Option<u8>| id.map(|id| Reg::from_id(id).unwrap());
+        self.builder
+            .register_op(register(rd), register(rs1), register(rs2), self.counter);
     }
 
     /// Run `f` against a trace backend padded to `2^log_t` cycles.
-    pub(crate) fn with_plane<R>(
-        self,
-        log_t: usize,
-        f: impl FnOnce(&TraceBackend<OwnedTrace>) -> R,
-    ) -> R {
-        assert!(self.rows.len() <= 1 << log_t, "fixture overflows 2^log_t");
-        let bytecode = self
-            .rows
-            .iter()
-            .map(|row| row.instruction)
-            .filter(|instruction| instruction.instruction_kind != JoltInstructionKind::NoOp)
-            .collect();
-        use std::sync::Arc;
-        let preprocessing = Arc::new(JoltProgramPreprocessing {
-            bytecode: BytecodePreprocessing::preprocess(bytecode, 0x8000_0000, RV64IMAC_JOLT)
-                .unwrap(),
-            ram: RAMPreprocessing::default(),
-            memory_layout: Default::default(),
-            max_padded_trace_length: 1 << log_t,
-        });
-        let program = Arc::new(JoltProgram::default());
-        let config = JoltVmWitnessConfig::new(
-            log_t,
-            64,
-            JoltOneHotConfig {
-                log_k_chunk: 4,
-                lookups_ra_virtual_log_k_chunk: 16,
-            },
+    pub(crate) fn with_plane<R>(self, log_t: usize, f: impl FnOnce(&TraceBackend) -> R) -> R {
+        assert!(
+            self.builder.len() <= 1 << log_t,
+            "fixture overflows 2^log_t"
         );
-        let inputs = JoltVmWitnessInputs::new(
-            &program,
-            &preprocessing,
-            TraceOutput::new(OwnedTrace::new(self.rows), Default::default(), None, None),
-        );
-        let backend = TraceBackend::new(config, inputs);
-        f(&backend)
+        let trace = self.builder.finish(1 << log_t);
+        with_trace_plane(log_t, 64, 4, trace, empty_io(), f)
     }
 }
 

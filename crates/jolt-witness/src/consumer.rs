@@ -414,9 +414,7 @@ mod tests {
             let column: Vec<Fr> = rows.iter().map(|bundle| bundle.pc.to_field()).collect();
             let table = crate::JoltWitnessOracle::<Fr>::oracle_table(
                 backend,
-                JoltPolynomialId::Virtual(
-                    jolt_claims::protocols::jolt::JoltVirtualPolynomial::PC,
-                ),
+                JoltPolynomialId::Virtual(jolt_claims::protocols::jolt::JoltVirtualPolynomial::PC),
             )
             .unwrap();
             assert_eq!(column, table);

@@ -50,7 +50,6 @@ use jolt_claims::protocols::jolt::{
 use jolt_claims::{InputClaims, OutputClaims, SumcheckChallenges};
 use jolt_field::JoltField;
 use jolt_poly::EqPolynomial;
-use jolt_riscv::JoltInstructionRow;
 use jolt_verifier::stages::relations::{
     ConcreteSumcheck, ConcreteSumcheckChallenges, SumcheckInputClaims, SumcheckOutputClaims,
 };
@@ -59,13 +58,14 @@ use jolt_verifier::stages::stage6b::committed_reduction_cycle_phase::{
     UntrustedAdviceCyclePhase,
 };
 use jolt_verifier::stages::stage6b::outputs::BytecodeReductionWeights;
+use jolt_wasm_ir::BytecodeRow;
 use jolt_witness::{JoltWitnessOracle, JoltWitnessPlane};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 use super::support::eq_table;
 use crate::committed_program::{
-    build_committed_bytecode_chunk_coeffs, chunk_index_to_lane_cycle, program_image_words_padded,
+    build_committed_bytecode_chunk, chunk_index_to_lane_cycle, program_image_words_padded,
 };
 use crate::opening::AdviceOpeningEvaluation;
 use crate::precommitted_reduction::{
@@ -281,7 +281,7 @@ impl<F: JoltField> PrepareKernel<F, ProgramImageReductionCyclePhase<F>>
             layout,
             inputs.relation.r_addr_rw(),
             layout.start_index(),
-            &program.ram.bytecode_words,
+            &program.program_image().words,
         )?))
     }
 }
@@ -374,7 +374,7 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReductionCyclePhase<F>> for Optimize
         Ok(Box::new(bytecode_reduction_kernel(
             inputs.relation.layout(),
             inputs.relation.weights(),
-            &program.bytecode.bytecode,
+            program.bytecode.rows(),
         )?))
     }
 }
@@ -386,7 +386,7 @@ impl<F: JoltField> PrepareKernel<F, BytecodeReductionCyclePhase<F>> for Optimize
 fn bytecode_reduction_kernel<F: JoltField>(
     layout: &BytecodeClaimReductionLayout,
     weights: &BytecodeReductionWeights<F>,
-    bytecode: &[JoltInstructionRow],
+    bytecode: &[BytecodeRow],
 ) -> Result<CycleReductionKernel<F, BytecodeReductionCyclePhase<F>>, KernelError<F>> {
     let reduction = layout.precommitted().clone();
     let chunk_coeffs = parallel_chunk_coeffs(bytecode, layout.chunk_count(), layout)?;
@@ -454,11 +454,10 @@ fn bytecode_reduction_kernel<F: JoltField>(
 }
 
 /// The per-chunk committed bytecode grids, one independent build per chunk in
-/// parallel: each chunk's rows are a contiguous instruction slice and the
-/// grid indexing is chunk-local, so a single-chunk build over the slice is
-/// coefficient-identical to that chunk of the full build.
+/// parallel: each chunk's rows are a contiguous instruction slice, encoded by
+/// the same single-chunk builder the full build folds over.
 fn parallel_chunk_coeffs<F: JoltField>(
-    bytecode: &[JoltInstructionRow],
+    bytecode: &[BytecodeRow],
     chunk_count: usize,
     layout: &BytecodeClaimReductionLayout,
 ) -> Result<Vec<Vec<F>>, KernelError<F>> {
@@ -471,22 +470,21 @@ fn parallel_chunk_coeffs<F: JoltField>(
         });
     }
     let chunk_cycle_len = bytecode.len() / chunk_count;
-    let build = |chunk: usize| -> Result<Vec<F>, KernelError<F>> {
-        let slice = &bytecode[chunk * chunk_cycle_len..(chunk + 1) * chunk_cycle_len];
-        build_committed_bytecode_chunk_coeffs(slice, 1, layout.trace_order())?
-            .into_iter()
-            .next()
-            .ok_or(KernelError::InvariantViolation {
-                reason: "single-chunk bytecode grid build produced no grid",
-            })
+    let build = |chunk: usize| -> Vec<F> {
+        let first_pc = chunk * chunk_cycle_len;
+        build_committed_bytecode_chunk(
+            &bytecode[first_pc..first_pc + chunk_cycle_len],
+            first_pc,
+            layout.trace_order(),
+        )
     };
     #[cfg(feature = "parallel")]
     {
-        (0..chunk_count).into_par_iter().map(build).collect()
+        Ok((0..chunk_count).into_par_iter().map(build).collect())
     }
     #[cfg(not(feature = "parallel"))]
     {
-        (0..chunk_count).map(build).collect()
+        Ok((0..chunk_count).map(build).collect())
     }
 }
 
@@ -507,46 +505,30 @@ fn parallel_chunk_coeffs<F: JoltField>(
     reason = "test module"
 )]
 mod tests {
-    use common::jolt_device::{JoltDevice, MemoryLayout};
-    use jolt_claims::protocols::jolt::{JoltOneHotConfig, TracePolynomialOrder};
+    use jolt_claims::protocols::jolt::TracePolynomialOrder;
     use jolt_field::{Fr, Ring};
-    use jolt_program::execution::{JoltProgram, OwnedTrace, TraceOutput, TraceRow};
-    use jolt_program::preprocess::{
-        BytecodePreprocessing, JoltProgramPreprocessing, RAMPreprocessing,
-    };
-    use jolt_riscv::{JoltInstructionKind, JoltInstructionRow, NormalizedOperands, RV64IMAC_JOLT};
     use jolt_verifier::stages::relations::SumcheckInputPoints;
     use jolt_verifier::stages::stage6b::committed_reduction_cycle_phase::BytecodeReductionCyclePhaseChallenges;
-    use jolt_verifier::stages::stage7::advice_address_phase::{
-        TrustedAdviceAddressPhase, UntrustedAdviceAddressPhase,
-    };
     use jolt_verifier::stages::stage7::committed_reduction_address_phase::{
         BytecodeReductionAddressPhase, ProgramImageReductionAddressPhase,
     };
     use jolt_verifier::stages::{CommittedProgramSchedule, PrecommittedSchedule};
-    use jolt_witness::{JoltVmWitnessConfig, JoltVmWitnessInputs, ProgramSource, TraceBackend};
+    use jolt_wasm_ir::layout::GLOBALS_BASE;
+    use jolt_wasm_program::PROGRAM_IMAGE_START_INDEX;
+    use jolt_witness::{ProgramSource, TraceBackend};
 
     use super::*;
     use crate::optimized::parity::{run_lockstep, synthetic_point};
+    use crate::optimized::testing::{empty_io, with_trace_plane, TraceBuilder};
     use crate::reference::precommitted_reduction::ReferencePrecommittedAddress;
     use crate::ReferenceBackend;
 
     const LOG_T: usize = 2;
     const LOG_K_CHUNK: usize = 4;
-    /// 16 advice words (4 variables).
-    const TRUSTED_ADVICE_MAX_BYTES: usize = 128;
-    /// 8 advice words (3 variables).
-    const UNTRUSTED_ADVICE_MAX_BYTES: usize = 64;
     const BYTECODE_CHUNK_COUNT: usize = 2;
-    const IMAGE_START_INDEX: usize = 3;
-    /// RAM address point length for the program-image relation: domain 32
-    /// comfortably holds the 8-word image block at `IMAGE_START_INDEX`.
-    const IMAGE_RAM_VARS: usize = 5;
-
-    const MISSING_TRUSTED: &str =
-        "stage 6b parked no trusted-advice reduction state for the scheduled address phase";
-    const MISSING_UNTRUSTED: &str =
-        "stage 6b parked no untrusted-advice reduction state for the scheduled address phase";
+    /// RAM address point length for the program-image relation: the smallest
+    /// domain holding the image block at [`PROGRAM_IMAGE_START_INDEX`].
+    const IMAGE_RAM_VARS: usize = 18;
     const MISSING_BYTECODE: &str =
         "stage 6b parked no bytecode reduction state for the scheduled address phase";
     const MISSING_PROGRAM_IMAGE: &str =
@@ -556,92 +538,53 @@ mod tests {
         Fr::from_u64(value)
     }
 
+    /// A four-row bytecode (two chunks) over a five-word program image.
     fn with_fixture<R>(
         trace_order: TracePolynomialOrder,
-        f: impl FnOnce(&TraceBackend<OwnedTrace>, &PrecommittedSchedule) -> R,
+        f: impl FnOnce(&TraceBackend, &PrecommittedSchedule) -> R,
     ) -> R {
-        let instructions: Vec<JoltInstructionRow> = (0..3u64)
-            .map(|index| JoltInstructionRow {
-                instruction_kind: JoltInstructionKind::ADDI,
-                address: (0x8000_0000u64 + 4 * index) as usize,
-                operands: NormalizedOperands {
-                    rd: Some(1 + index as u8),
-                    rs1: Some(2),
-                    rs2: None,
-                    imm: 3 + index as i128,
-                },
-                virtual_sequence_remaining: None,
-                is_first_in_sequence: false,
-                is_compressed: false,
-            })
-            .collect();
-        let memory_layout = MemoryLayout {
-            max_trusted_advice_size: TRUSTED_ADVICE_MAX_BYTES as u64,
-            max_untrusted_advice_size: UNTRUSTED_ADVICE_MAX_BYTES as u64,
-            ..Default::default()
-        };
-        use std::sync::Arc;
-        let preprocessing = Arc::new(JoltProgramPreprocessing {
-            bytecode: BytecodePreprocessing::preprocess(
-                instructions,
-                0x8000_0000u64,
-                RV64IMAC_JOLT,
-            )
-            .unwrap(),
-            ram: RAMPreprocessing {
-                min_bytecode_address: 0x8000_0000,
-                bytecode_words: vec![7, 11, 13, 17, 19],
-            },
-            memory_layout: memory_layout.clone(),
-            max_padded_trace_length: 1 << LOG_T,
-        });
-        let program = Arc::new(JoltProgram::default());
-        let rows = vec![TraceRow::default(), TraceRow::default()];
-        let device = JoltDevice {
-            trusted_advice: (1..=24).collect(),
-            untrusted_advice: (101..=116).collect(),
-            memory_layout,
-            ..Default::default()
-        };
-        let config = JoltVmWitnessConfig::new(
+        let mut builder = TraceBuilder::new();
+        for (i, value) in [7, 11, 13, 17, 19].into_iter().enumerate() {
+            builder.initial_word(GLOBALS_BASE + 8 * i as u64, value);
+        }
+        builder.nop();
+        builder.nop();
+        builder.jump(0);
+        let trace = builder.finish(1 << LOG_T);
+        with_trace_plane(
             LOG_T,
-            64,
-            JoltOneHotConfig {
-                log_k_chunk: LOG_K_CHUNK as u8,
-                lookups_ra_virtual_log_k_chunk: 16,
+            1 << IMAGE_RAM_VARS,
+            LOG_K_CHUNK as u8,
+            trace,
+            empty_io(),
+            |backend| {
+                let bytecode_len = backend.program_preprocessing().bytecode.rows().len();
+                assert!(
+                    bytecode_len.is_power_of_two()
+                        && bytecode_len.is_multiple_of(BYTECODE_CHUNK_COUNT),
+                    "fixture bytecode length {bytecode_len} defeats the chunking"
+                );
+                let program_image_len_words = program_image_words_padded(
+                    &backend.program_preprocessing().program_image().words,
+                )
+                .len();
+                let schedule = PrecommittedSchedule::new(
+                    trace_order,
+                    LOG_T,
+                    LOG_K_CHUNK,
+                    None,
+                    None,
+                    Some(CommittedProgramSchedule {
+                        bytecode_len,
+                        bytecode_chunk_count: BYTECODE_CHUNK_COUNT,
+                        program_image_len_words,
+                        program_image_start_index: PROGRAM_IMAGE_START_INDEX as usize,
+                    }),
+                )
+                .unwrap();
+                f(backend, &schedule)
             },
         )
-        .include_trusted_advice(true)
-        .include_untrusted_advice(true);
-        let inputs = JoltVmWitnessInputs::new(
-            &program,
-            &preprocessing,
-            TraceOutput::new(OwnedTrace::new(rows), device, None, None),
-        );
-        let backend = TraceBackend::new(config, inputs);
-
-        let bytecode_len = backend.program_preprocessing().bytecode.bytecode.len();
-        assert!(
-            bytecode_len.is_power_of_two() && bytecode_len.is_multiple_of(BYTECODE_CHUNK_COUNT),
-            "fixture bytecode length {bytecode_len} defeats the chunking"
-        );
-        let program_image_len_words =
-            program_image_words_padded(&backend.program_preprocessing().ram.bytecode_words).len();
-        let schedule = PrecommittedSchedule::new(
-            trace_order,
-            LOG_T,
-            LOG_K_CHUNK,
-            Some(TRUSTED_ADVICE_MAX_BYTES),
-            Some(UNTRUSTED_ADVICE_MAX_BYTES),
-            Some(CommittedProgramSchedule {
-                bytecode_len,
-                bytecode_chunk_count: BYTECODE_CHUNK_COUNT,
-                program_image_len_words,
-                program_image_start_index: IMAGE_START_INDEX,
-            }),
-        )
-        .unwrap();
-        f(&backend, &schedule)
     }
 
     /// Both phases of one kind in lockstep: cycle-phase parity, a
@@ -657,7 +600,7 @@ mod tests {
         SumcheckOutputClaims<Fr, RA>: OutputClaims<Fr>,
         ConcreteSumcheckChallenges<Fr, RA>: SumcheckChallenges<Fr, JoltChallengeId>,
     {
-        backend: &'a TraceBackend<OwnedTrace>,
+        backend: &'a TraceBackend,
         cycle_relation: &'a RC,
         cycle_claims: &'a SumcheckInputClaims<Fr, RC>,
         cycle_points: &'a SumcheckInputPoints<Fr, RC>,
@@ -813,93 +756,6 @@ mod tests {
         }
     }
 
-    fn advice_pair(trace_order: TracePolynomialOrder, kind: JoltAdviceKind) {
-        with_fixture(trace_order, |backend, schedule| {
-            let layout = schedule.advice(kind).unwrap().clone();
-            let dimensions = layout.dimensions();
-            assert!(
-                dimensions.has_address_phase(),
-                "fixture geometry must schedule an address phase for {kind:?}"
-            );
-            let r_val = synthetic_point(
-                layout
-                    .precommitted()
-                    .poly_opening_round_permutation_be()
-                    .len(),
-                43,
-            );
-            let cycle_rounds = dimensions.cycle_phase_total_rounds();
-            let address_rounds = dimensions.address_phase_total_rounds();
-            let cycle_challenges = synthetic_point(cycle_rounds, 7);
-            let cycle_vars = layout
-                .cycle_phase_variable_challenges(&cycle_challenges)
-                .unwrap();
-
-            match kind {
-                JoltAdviceKind::Trusted => {
-                    let cycle_relation = TrustedAdviceCyclePhase::new(&layout, Some(r_val.clone()));
-                    let address_relation =
-                        TrustedAdviceAddressPhase::new(&layout, Some(r_val), cycle_vars);
-                    let pair = PhasePair {
-                        backend,
-                        cycle_relation: &cycle_relation,
-                        cycle_claims: &Default::default(),
-                        cycle_points: &Default::default(),
-                        cycle_challenges_struct: &Default::default(),
-                        address_relation: &address_relation,
-                        address_claims: &Default::default(),
-                        address_points: &Default::default(),
-                        address_challenges_struct: &Default::default(),
-                        missing_carry: MISSING_TRUSTED,
-                    };
-                    let _ = pair.run(cycle_rounds, address_rounds, |claims| claims.trusted, 7);
-                }
-                JoltAdviceKind::Untrusted => {
-                    let cycle_relation =
-                        UntrustedAdviceCyclePhase::new(&layout, Some(r_val.clone()));
-                    let address_relation =
-                        UntrustedAdviceAddressPhase::new(&layout, Some(r_val), cycle_vars);
-                    let pair = PhasePair {
-                        backend,
-                        cycle_relation: &cycle_relation,
-                        cycle_claims: &Default::default(),
-                        cycle_points: &Default::default(),
-                        cycle_challenges_struct: &Default::default(),
-                        address_relation: &address_relation,
-                        address_claims: &Default::default(),
-                        address_points: &Default::default(),
-                        address_challenges_struct: &Default::default(),
-                        missing_carry: MISSING_UNTRUSTED,
-                    };
-                    let _ = pair.run(cycle_rounds, address_rounds, |claims| claims.untrusted, 11);
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn trusted_advice_phases_match_reference_cycle_major() {
-        advice_pair(TracePolynomialOrder::CycleMajor, JoltAdviceKind::Trusted);
-    }
-
-    #[test]
-    fn trusted_advice_phases_match_reference_address_major() {
-        advice_pair(TracePolynomialOrder::AddressMajor, JoltAdviceKind::Trusted);
-    }
-
-    #[test]
-    fn untrusted_advice_phases_match_reference_cycle_major() {
-        advice_pair(TracePolynomialOrder::CycleMajor, JoltAdviceKind::Untrusted);
-    }
-
-    #[test]
-    fn untrusted_advice_phases_match_reference_address_major() {
-        advice_pair(
-            TracePolynomialOrder::AddressMajor,
-            JoltAdviceKind::Untrusted,
-        );
-    }
-
     fn bytecode_pair(trace_order: TracePolynomialOrder) {
         with_fixture(trace_order, |backend, schedule| {
             let layout = schedule.bytecode.as_ref().unwrap().clone();
@@ -1032,44 +888,5 @@ mod tests {
                 "shifted eq slice diverged for start {start}, len {len}"
             );
         }
-    }
-
-    /// The advice opening evaluation (stage 4) against the reference slot.
-    #[test]
-    fn advice_opening_evaluation_matches_reference() {
-        with_fixture(TracePolynomialOrder::CycleMajor, |backend, schedule| {
-            for kind in [JoltAdviceKind::Trusted, JoltAdviceKind::Untrusted] {
-                let vars = schedule
-                    .advice(kind)
-                    .unwrap()
-                    .precommitted()
-                    .poly_opening_round_permutation_be()
-                    .len();
-                let point = synthetic_point(vars, 71);
-                let reference_value = <ReferenceBackend as AdviceOpeningEvaluation<Fr>>::evaluate(
-                    &ReferenceBackend,
-                    &mut ProofSession::default(),
-                    kind,
-                    &point,
-                    backend,
-                )
-                .unwrap();
-                let optimized_value =
-                    <OptimizedPrecommittedCycle as AdviceOpeningEvaluation<Fr>>::evaluate(
-                        &OptimizedPrecommittedCycle,
-                        &mut ProofSession::default(),
-                        kind,
-                        &point,
-                        backend,
-                    )
-                    .unwrap();
-                assert_eq!(reference_value, optimized_value);
-                assert_ne!(
-                    reference_value,
-                    Fr::from_u64(0),
-                    "degenerate advice fixture"
-                );
-            }
-        });
     }
 }

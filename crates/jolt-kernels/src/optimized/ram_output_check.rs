@@ -231,106 +231,60 @@ impl<F: JoltField> SumcheckKernel<F> for OutputCheckKernel<F> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used, reason = "test module")]
 mod tests {
-    use common::constants::RAM_START_ADDRESS;
-    use common::jolt_device::{JoltDevice, MemoryConfig};
-    use jolt_claims::protocols::jolt::{JoltOneHotConfig, ReadWriteDimensions};
+    use super::super::testing::{assert_parity, random_scalars, with_trace_plane, TraceBuilder};
+    use super::*;
+    use crate::ReferenceBackend;
+    use jolt_claims::protocols::jolt::ReadWriteDimensions;
     use jolt_field::{Fr, Ring};
-    use jolt_program::execution::{JoltProgram, MemoryImage, OwnedTrace, TraceOutput, TraceRow};
-    use jolt_program::preprocess::{
-        BytecodePreprocessing, JoltProgramPreprocessing, PublicIoMemory, RAMPreprocessing,
-    };
-    use jolt_riscv::{JoltInstructionKind, JoltInstructionRow, NormalizedOperands, RV64IMAC_JOLT};
     use jolt_verifier::stages::stage2::ram_output_check::{
         RamOutputCheckChallenges, RamOutputCheckInputClaims,
     };
-    use jolt_witness::{JoltVmWitnessConfig, JoltVmWitnessInputs, TraceBackend};
+    use jolt_wasm_ir::layout::{
+        remap_word_address, LINEAR_MEMORY_BASE, OUTPUTS_BASE, TERMINATION_ADDR,
+    };
+    use jolt_wasm_program::{PublicIo, PublicIoMemory};
 
-    use super::super::testing::{assert_parity, random_scalars};
-    use super::*;
-    use crate::ReferenceBackend;
+    /// The RAM domain holding the public I/O window.
+    const LOG_K: usize = 18;
 
-    /// A witness plane whose `RamValFinal` is nontrivial on both sides of the
-    /// IO-mask boundary: real inputs/outputs (the oracle synthesizes the IO
-    /// region from the device, so `val_final = val_io` there by construction)
-    /// plus a final-memory image carrying post-execution DRAM bytes.
-    fn with_output_check_plane<R>(
-        log_t: usize,
-        ram_k: usize,
-        f: impl FnOnce(&dyn JoltWitnessPlane<Fr>, PublicIoMemory) -> R,
-    ) -> R {
-        let mut device = JoltDevice::new(&MemoryConfig {
-            program_size: Some(1024),
-            max_trusted_advice_size: 0,
-            max_untrusted_advice_size: 0,
-            max_input_size: 16,
-            max_output_size: 16,
-            ..Default::default()
-        });
-        device.inputs = vec![42, 1];
-        device.outputs = vec![7];
-        let public_memory = PublicIoMemory::new(&device).unwrap();
-
-        let instruction = JoltInstructionRow {
-            instruction_kind: JoltInstructionKind::ADDI,
-            address: 0x8000_0000,
-            operands: NormalizedOperands {
-                rd: Some(1),
-                rs1: Some(2),
-                rs2: None,
-                imm: 3,
-            },
-            virtual_sequence_remaining: None,
-            is_first_in_sequence: false,
-            is_compressed: false,
-        };
-        use std::sync::Arc;
-        let preprocessing = Arc::new(JoltProgramPreprocessing {
-            bytecode: BytecodePreprocessing::preprocess(
-                vec![instruction],
-                instruction.address as u64,
-                RV64IMAC_JOLT,
-            )
-            .unwrap(),
-            ram: RAMPreprocessing::default(),
-            memory_layout: device.memory_layout.clone(),
-            max_padded_trace_length: 1 << log_t,
-        });
-        let rows = vec![TraceRow {
-            instruction,
-            ..TraceRow::default()
-        }];
-        // Post-execution DRAM bytes (outside the IO mask): nonzero
-        // `val_final − val_io` there keeps the later round polynomials
-        // nontrivial while the Boolean-point sum stays zero.
-        let final_memory = MemoryImage {
-            bytes: vec![
-                (RAM_START_ADDRESS, 0xAB),
-                (RAM_START_ADDRESS + 8, 0x13),
-                (RAM_START_ADDRESS + 17, 0x07),
-            ],
-        };
-
-        let program = Arc::new(JoltProgram::default());
-        let config = JoltVmWitnessConfig::new(
-            log_t,
-            ram_k,
-            JoltOneHotConfig {
-                log_k_chunk: 4,
-                lookups_ra_virtual_log_k_chunk: 16,
-            },
-        );
-        let inputs = JoltVmWitnessInputs::new(
-            &program,
-            &preprocessing,
-            TraceOutput::new(OwnedTrace::new(rows), device, Some(final_memory), None),
-        );
-        let backend = TraceBackend::new(config, inputs);
-        f(&backend, public_memory)
+    /// The dense index of the first linear-memory word (outside the I/O
+    /// mask).
+    fn dram_index() -> usize {
+        remap_word_address(LINEAR_MEMORY_BASE).unwrap() as usize
     }
 
-    fn run_parity(log_t: usize, ram_k: usize, seed: u64) {
-        with_output_check_plane(log_t, ram_k, |witness, public_memory| {
-            let log_k = ram_k.trailing_zeros() as usize;
+    /// A witness plane whose `RamValFinal` is nontrivial on both sides of the
+    /// IO-mask boundary: real inputs/outputs written by the trace (so
+    /// `val_final = val_io` there) plus post-execution linear-memory words.
+    fn with_output_check_plane<R>(
+        log_t: usize,
+        f: impl FnOnce(&dyn JoltWitnessPlane<Fr>, PublicIoMemory) -> R,
+    ) -> R {
+        let io = PublicIo {
+            entry: "main".to_owned(),
+            inputs: vec![42, 1],
+            outputs: vec![7],
+        };
+        let public_memory = PublicIoMemory::new(&io);
+        let mut builder = TraceBuilder::new();
+        builder.store(OUTPUTS_BASE, 7);
+        builder.store(TERMINATION_ADDR, 1);
+        // Post-execution linear-memory words (outside the IO mask): nonzero
+        // `val_final − val_io` there keeps the later round polynomials
+        // nontrivial while the Boolean-point sum stays zero.
+        builder.store(LINEAR_MEMORY_BASE, 0xAB);
+        builder.store(LINEAR_MEMORY_BASE + 8, 0x13);
+        builder.store(LINEAR_MEMORY_BASE + 16, 0x07);
+        builder.jump(0);
+        let trace = builder.finish(1 << log_t);
+        with_trace_plane(log_t, 1 << LOG_K, 4, trace, io, |backend| {
+            f(backend, public_memory)
+        })
+    }
+
+    fn run_parity(log_t: usize, seed: u64) {
+        with_output_check_plane(log_t, |witness, public_memory| {
+            let log_k = LOG_K;
             let relation = RamOutputCheck::<Fr>::new(
                 ReadWriteDimensions::new(log_t, log_k, log_t, log_k),
                 public_memory,
@@ -344,7 +298,11 @@ mod tests {
             // Fixture guard: the DRAM image must reach `val_final` (a zero
             // table would make parity vacuous).
             let val_final = dense_view::<Fr>(witness, ram_val_final()).unwrap();
-            assert_ne!(val_final[8], Fr::from_u64(0), "degenerate DRAM fixture");
+            assert_ne!(
+                val_final[dram_index()],
+                Fr::from_u64(0),
+                "degenerate DRAM fixture"
+            );
 
             let inputs = ProverInputs {
                 relation: &relation,
@@ -384,17 +342,17 @@ mod tests {
     }
 
     #[test]
-    fn parity_k16() {
-        run_parity(3, 16, 401);
+    fn parity_log_t3() {
+        run_parity(3, 401);
     }
 
     #[test]
-    fn parity_k32_deeper_address_domain() {
-        run_parity(4, 32, 409);
+    fn parity_log_t4() {
+        run_parity(4, 409);
     }
 
     #[test]
-    fn parity_k16_alternate_seed() {
-        run_parity(2, 16, 419);
+    fn parity_log_t3_alternate_seed() {
+        run_parity(3, 419);
     }
 }

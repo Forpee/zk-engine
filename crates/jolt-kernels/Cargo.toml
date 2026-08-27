@@ -13,7 +13,6 @@ workspace = true
 
 [features]
 default = ["parallel"]
-akita = ["jolt-claims/akita", "jolt-verifier/akita"]
 # Shallow heap visitation of the proof session (profile harness flamegraphs).
 allocative = ["dep:allocative", "jolt-poly/allocative"]
 parallel = [
@@ -34,19 +33,20 @@ jolt-kernels-derive.workspace = true
 jolt-lookup-tables.workspace = true
 jolt-openings.workspace = true
 jolt-poly = { workspace = true, default-features = false }
-jolt-program.workspace = true
-jolt-riscv.workspace = true
 jolt-r1cs.workspace = true
 jolt-sumcheck.workspace = true
 jolt-utils.workspace = true
 jolt-verifier.workspace = true
 jolt-witness.workspace = true
+jolt-wasm-ir.workspace = true
+jolt-wasm-program.workspace = true
+jolt-wasm-tables.workspace = true
 rayon = { workspace = true, optional = true }
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-common = { workspace = true, features = ["std"] }
+jolt-wasm-backend.workspace = true
 jolt-claims = { workspace = true, features = ["test-utils"] }
 jolt-dory.workspace = true
 jolt-witness = { workspace = true, features = ["test-utils"] }

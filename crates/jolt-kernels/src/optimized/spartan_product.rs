@@ -15,9 +15,8 @@ use std::collections::BTreeMap;
 
 use jolt_claims::protocols::jolt::geometry::dimensions::PRODUCT_UNISKIP_DOMAIN_SIZE;
 use jolt_claims::protocols::jolt::geometry::spartan::{
-    branch_flag_product, jump_flag_product, left_instruction_input_product, lookup_output_product,
-    next_is_noop_product, right_instruction_input_product, virtual_instruction_product,
-    write_lookup_output_to_rd_product,
+    branch_flag_product, left_instruction_input_product, lookup_output_product,
+    right_instruction_input_product,
 };
 use jolt_claims::protocols::jolt::{
     JoltDerivedId, JoltOpeningId, SpartanProductVirtualizationPublic,
@@ -29,7 +28,6 @@ use jolt_poly::lagrange::{
     centered_lagrange_evals, centered_lagrange_kernel, interpolate_to_coeffs, poly_mul,
 };
 use jolt_poly::{BindingOrder, EqPolynomial, GruenSplitEqPolynomial, Polynomial, UnivariatePoly};
-use jolt_riscv::{CircuitFlags, InstructionFlags};
 use jolt_sumcheck::{ProveRounds, SumcheckError};
 use jolt_utils::unsafe_allocate_zero_vec;
 use jolt_verifier::stages::relations::{
@@ -37,9 +35,8 @@ use jolt_verifier::stages::relations::{
     SumcheckOutputClaims, SumcheckOutputPoints,
 };
 use jolt_verifier::stages::stage2::product_remainder::ProductRemainder;
-use jolt_witness::witnesses::{
-    InstructionFlag, LeftInstructionInput, LookupOutput, NextIsNoop, OpFlag, RightInstructionInput,
-};
+use jolt_wasm_ir::RowFlag;
+use jolt_witness::witnesses::{Flag, LeftInstructionInput, LookupOutput, RightInstructionInput};
 use jolt_witness::{JoltWitnessPlane, WitnessBundle, WitnessError};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
@@ -58,26 +55,19 @@ const EXTENDED_SIZE: usize = 2 * DOMAIN - 1;
 const DOMAIN_START: i64 = -((DOMAIN as i64 - 1) / 2);
 const EXTENDED_START: i64 = -((EXTENDED_SIZE as i64 - 1) / 2);
 
-/// The per-cycle product-virtualization witness: the three left/right factor
-/// lanes plus the two wire passengers, as native small scalars.
+/// The per-cycle product-virtualization witness: the two left/right factor
+/// lanes (`Product = Left · Right`, `ShouldBranch = LookupOutput · Branch`)
+/// as native small scalars.
 #[derive(Clone, Copy, Debug, WitnessBundle)]
 pub struct SpartanProductRow {
     #[opening(LeftInstructionInput)]
     pub left_instruction_input: LeftInstructionInput,
     #[opening(RightInstructionInput)]
     pub right_instruction_input: RightInstructionInput,
-    #[opening(OpFlags(CircuitFlags::Jump))]
-    pub jump_flag: OpFlag,
-    #[opening(OpFlags(CircuitFlags::WriteLookupOutputToRD))]
-    pub write_lookup_output_to_rd: OpFlag,
     #[opening(LookupOutput)]
     pub lookup_output: LookupOutput,
-    #[opening(InstructionFlags(InstructionFlags::Branch))]
-    pub branch_flag: InstructionFlag,
-    #[opening(NextIsNoop)]
-    pub next_is_noop: NextIsNoop,
-    #[opening(OpFlags(CircuitFlags::VirtualInstruction))]
-    pub virtual_instruction: OpFlag,
+    #[opening(RowFlag(RowFlag::Branch))]
+    pub branch_flag: Flag,
 }
 
 /// The exact integer Lagrange coefficients `L_i(node)` of the 3-node base
@@ -105,8 +95,8 @@ fn extension_coefficients() -> [[i64; DOMAIN]; EXTENDED_SIZE] {
 }
 
 /// `left(node) · right(node)` for one cycle at every extended node, as exact
-/// integers: `|left| < 2^67` (two u64 lanes and a flag), `|right| < 2^129`
-/// (the i128 lane), product `< 2^196` — inside `S256`.
+/// integers: `|left| < 2^66` (two u64 lanes), `|right| < 2^66` (a u64 lane
+/// and a flag), product `< 2^132` — inside `S256`.
 /// `coefficients` is [`extension_coefficients`], hoisted out of the per-cycle
 /// loop (its integer Lagrange build is not free at `2^23` calls).
 fn extended_products(
@@ -117,22 +107,19 @@ fn extended_products(
     let left_lanes = [
         i128::from(row.left_instruction_input.0),
         i128::from(row.lookup_output.0),
-        i128::from(row.jump_flag.0),
     ];
-    let right_wide = S192::from_i128(row.right_instruction_input.0);
-    let right_flags = [
-        i64::from(row.branch_flag.0),
-        1 - i64::from(row.next_is_noop.0),
+    let right_lanes = [
+        i128::from(row.right_instruction_input.0),
+        i128::from(row.branch_flag.0),
     ];
     for (slot, coefficients) in out.iter_mut().zip(coefficients) {
         let mut left: i128 = 0;
-        for (lane, &c) in left_lanes.iter().zip(coefficients) {
-            left += i128::from(c) * lane;
+        let mut right: i128 = 0;
+        for ((left_lane, right_lane), &c) in left_lanes.iter().zip(&right_lanes).zip(coefficients) {
+            left += i128::from(c) * left_lane;
+            right += i128::from(c) * right_lane;
         }
-        let mut right = S192::from_i64(coefficients[0]).mul_trunc::<3, 3>(&right_wide);
-        right +=
-            S192::from_i64(coefficients[1] * right_flags[0] + coefficients[2] * right_flags[1]);
-        *slot = S128::from_i128(left).mul_trunc::<3, 4>(&right);
+        *slot = S128::from_i128(left).mul_trunc::<3, 4>(&S192::from_i128(right));
     }
     out
 }
@@ -342,10 +329,9 @@ impl<F: JoltField> ProductRemainderKernel<F> {
 
         // Fused round-0 materialization: one pass over the typed rows writes
         // the weighted left/right tables and accumulates the first round's
-        // Gruen endpoints. Left folds through the small-scalar accumulator —
-        // its 5-limb window holds exactly this shape (two full-u64 lanes and
-        // a flag stay under 2^319); right's i128 lane goes through the
-        // signed-product path.
+        // Gruen endpoints. Both sides fold through the small-scalar
+        // accumulator — its 5-limb window holds this shape (a full-u64 lane
+        // and a flag stay under 2^319).
         let cycles = 1usize << log_t;
         let mut left: Vec<F> = unsafe_allocate_zero_vec(cycles);
         let mut right: Vec<F> = unsafe_allocate_zero_vec(cycles);
@@ -359,20 +345,9 @@ impl<F: JoltField> ProductRemainderKernel<F> {
             let mut left_acc = <F as WithAccumulator>::SmallScalarAccumulator::default();
             left_acc.fmadd_u64(weights_ref[0], row.left_instruction_input.0);
             left_acc.fmadd_u64(weights_ref[1], row.lookup_output.0);
-            left_acc.fmadd_u64(weights_ref[2], u64::from(row.jump_flag.0));
-            let mut right_acc = <F as WithAccumulator>::SignedProductAccumulator::default();
-            right_acc.fmadd_s256(
-                weights_ref[0],
-                &S256::from_i128(row.right_instruction_input.0),
-            );
-            right_acc.fmadd_s256(
-                weights_ref[1],
-                &S256::from_u64(u64::from(row.branch_flag.0)),
-            );
-            right_acc.fmadd_s256(
-                weights_ref[2],
-                &S256::from_u64(1 - u64::from(row.next_is_noop.0)),
-            );
+            let mut right_acc = <F as WithAccumulator>::SmallScalarAccumulator::default();
+            right_acc.fmadd_u64(weights_ref[0], row.right_instruction_input.0);
+            right_acc.fmadd_u64(weights_ref[1], u64::from(row.branch_flag.0));
             (left_acc.reduce(), right_acc.reduce())
         };
         let block = |x_out: usize,
@@ -441,7 +416,7 @@ impl<F: JoltField> ProductRemainderKernel<F> {
         self.pending_endpoints = None;
     }
 
-    /// The eight produced opening values at the bound cycle point: one
+    /// The four produced opening values at the bound cycle point: one
     /// eq-weighted walk over the typed rows, in the output claims' canonical
     /// field order.
     fn claimed_inputs(&self) -> Result<Vec<F>, WitnessError> {
@@ -457,32 +432,23 @@ impl<F: JoltField> ProductRemainderKernel<F> {
             let end = (start + block_size).min(cycles);
             let mut words: [<F as WithAccumulator>::SignedProductAccumulator; 3] =
                 [Default::default(), Default::default(), Default::default()];
-            let mut flags: [<F as WithAccumulator>::SmallScalarAccumulator; 5] = Default::default();
+            let mut branch = <F as WithAccumulator>::SmallScalarAccumulator::default();
             for (t, &weight) in (start..end).zip(&weights[start..end]) {
                 let row = access.row(t)?;
                 words[0].fmadd_s256(weight, &S256::from_u64(row.left_instruction_input.0));
-                words[1].fmadd_s256(weight, &S256::from_i128(row.right_instruction_input.0));
+                words[1].fmadd_s256(weight, &S256::from_u64(row.right_instruction_input.0));
                 words[2].fmadd_s256(weight, &S256::from_u64(row.lookup_output.0));
-                flags[0].fmadd_u64(weight, u64::from(row.jump_flag.0));
-                flags[1].fmadd_u64(weight, u64::from(row.write_lookup_output_to_rd.0));
-                flags[2].fmadd_u64(weight, u64::from(row.branch_flag.0));
-                flags[3].fmadd_u64(weight, u64::from(row.next_is_noop.0));
-                flags[4].fmadd_u64(weight, u64::from(row.virtual_instruction.0));
+                branch.fmadd_u64(weight, u64::from(row.branch_flag.0));
             }
             let [left_input, right_input, lookup_output] = words;
-            let [jump, write_lookup, branch, noop, virtual_instruction] = flags;
             Ok(vec![
                 left_input.reduce(),
                 right_input.reduce(),
-                jump.reduce(),
-                write_lookup.reduce(),
                 lookup_output.reduce(),
                 branch.reduce(),
-                noop.reduce(),
-                virtual_instruction.reduce(),
             ])
         };
-        try_par_sum_vecs(blocks, 8, block)
+        try_par_sum_vecs(blocks, 4, block)
     }
 }
 
@@ -526,12 +492,8 @@ impl<F: JoltField> SumcheckKernel<F> for ProductRemainderKernel<F> {
         let ids = [
             left_instruction_input_product(),
             right_instruction_input_product(),
-            jump_flag_product(),
-            write_lookup_output_to_rd_product(),
             lookup_output_product(),
             branch_flag_product(),
-            next_is_noop_product(),
-            virtual_instruction_product(),
         ];
         let claims: BTreeMap<JoltOpeningId, F> =
             ids.into_iter()
@@ -592,7 +554,7 @@ mod tests {
     use jolt_verifier::stages::stage2::product_remainder::{
         product_remainder_input_values_from_uniskip_output, ProductRemainderInputClaims,
     };
-    use jolt_witness::testing::with_sample_backend;
+    use jolt_witness::testing::{with_sample_backend, SAMPLE_CYCLES};
     use jolt_witness::witnesses::ToField;
     use jolt_witness::{BundleSource, FixedBackend, JoltWitnessOracle, PolynomialEncoding, Shape};
 
@@ -600,29 +562,21 @@ mod tests {
     use crate::reference::spartan_product::{ReferenceProductRemainder, SpartanProductKernel};
     use crate::ReferenceBackend;
 
-    /// The eight product columns in the output claims' canonical order.
-    const COLUMNS: [JoltVirtualPolynomial; 8] = [
+    /// The four product columns in the output claims' canonical order.
+    const COLUMNS: [JoltVirtualPolynomial; 4] = [
         JoltVirtualPolynomial::LeftInstructionInput,
         JoltVirtualPolynomial::RightInstructionInput,
-        JoltVirtualPolynomial::OpFlags(CircuitFlags::Jump),
-        JoltVirtualPolynomial::OpFlags(CircuitFlags::WriteLookupOutputToRD),
         JoltVirtualPolynomial::LookupOutput,
-        JoltVirtualPolynomial::InstructionFlags(InstructionFlags::Branch),
-        JoltVirtualPolynomial::NextIsNoop,
-        JoltVirtualPolynomial::OpFlags(CircuitFlags::VirtualInstruction),
+        JoltVirtualPolynomial::RowFlag(RowFlag::Branch),
     ];
 
     fn column_field_value(row: &SpartanProductRow, index: usize) -> Fr {
         match index {
             0 => row.left_instruction_input.to_field(),
             1 => row.right_instruction_input.to_field(),
-            2 => row.jump_flag.to_field(),
-            3 => row.write_lookup_output_to_rd.to_field(),
-            4 => row.lookup_output.to_field(),
-            5 => row.branch_flag.to_field(),
-            6 => row.next_is_noop.to_field(),
-            7 => row.virtual_instruction.to_field(),
-            _ => unreachable!("8 product columns"),
+            2 => row.lookup_output.to_field(),
+            3 => row.branch_flag.to_field(),
+            _ => unreachable!("4 product columns"),
         }
     }
 
@@ -637,24 +591,11 @@ mod tests {
         (0..1usize << log_t)
             .map(|_| {
                 let bits = next();
-                let signed = {
-                    let value = next();
-                    let magnitude = i128::from(value >> 1) << 60;
-                    if value & 1 == 1 {
-                        -magnitude
-                    } else {
-                        magnitude
-                    }
-                };
                 SpartanProductRow {
                     left_instruction_input: LeftInstructionInput(next()),
-                    right_instruction_input: RightInstructionInput(signed),
-                    jump_flag: OpFlag(bits & 1 == 1),
-                    write_lookup_output_to_rd: OpFlag(bits & 2 == 2),
+                    right_instruction_input: RightInstructionInput(next()),
                     lookup_output: LookupOutput(next()),
-                    branch_flag: InstructionFlag(bits & 4 == 4),
-                    next_is_noop: NextIsNoop(bits & 8 == 8),
-                    virtual_instruction: OpFlag(bits & 16 == 16),
+                    branch_flag: Flag(bits & 4 == 4),
                 }
             })
             .collect()
@@ -684,15 +625,12 @@ mod tests {
         let eq = EqPolynomial::new(tau_low.to_vec()).evaluations();
         let weights = centered_lagrange_evals::<Fr>(DOMAIN, r0).unwrap();
         let scale = centered_lagrange_kernel::<Fr>(DOMAIN, tau_high, r0).unwrap();
-        let one = Fr::from_u64(1);
         let mut total = Fr::from_u64(0);
         for (row, &eq_value) in rows.iter().zip(&eq) {
-            let left = weights[0] * column_field_value(row, 0)
-                + weights[1] * column_field_value(row, 4)
-                + weights[2] * column_field_value(row, 2);
-            let right = weights[0] * column_field_value(row, 1)
-                + weights[1] * column_field_value(row, 5)
-                + weights[2] * (one - column_field_value(row, 6));
+            let left =
+                weights[0] * column_field_value(row, 0) + weights[1] * column_field_value(row, 2);
+            let right =
+                weights[0] * column_field_value(row, 1) + weights[1] * column_field_value(row, 3);
             total += eq_value * left * right;
         }
         scale * total
@@ -826,7 +764,7 @@ mod tests {
     #[test]
     fn sample_trace_parity_through_the_trait_path() {
         with_sample_backend(|backend| {
-            let log_t = 2usize;
+            let log_t = SAMPLE_CYCLES.ilog2() as usize;
             let tau_low: Vec<Fr> = (0..log_t)
                 .map(|i| Fr::from_u64(41 + 19 * i as u64))
                 .collect();
@@ -946,7 +884,7 @@ mod tests {
         }
     }
 
-    /// The typed bundle's columns equal the oracle tables for all eight
+    /// The typed bundle's columns equal the oracle tables for all four
     /// product openings.
     #[test]
     fn bundle_columns_match_oracle_tables() {

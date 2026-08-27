@@ -28,7 +28,6 @@ use super::committed_reduction_cycle_phase::{
     BytecodeReductionCyclePhase, ProgramImageReductionCyclePhase, TrustedAdviceCyclePhase,
     UntrustedAdviceCyclePhase,
 };
-#[cfg(not(feature = "akita"))]
 use super::inc_claim_reduction::IncClaimReduction;
 use super::instruction_ra_virtualization::InstructionRaVirtualization;
 use super::ram_hamming_booleanity::RamHammingBooleanity;
@@ -79,7 +78,6 @@ pub struct Stage6bSumchecks<F: JoltField> {
     pub instruction_ra_virtualization: InstructionRaVirtualization<F>,
     /// Absent on the packed path: the inc claims are discharged inside the
     /// bytecode read-raf's fused-inc stages instead.
-    #[cfg(not(feature = "akita"))]
     pub inc_claim_reduction: IncClaimReduction<F>,
     /// On the prove side the four precommitted reduction kernels span the
     /// 6b→7 batch boundary as `ProofSession` carries: each cycle kernel parks
@@ -101,10 +99,7 @@ impl<F: JoltField> Stage6bOutputPoints<F> {
     /// produced booleanity RA opening uses it. `None` only if booleanity produced
     /// no openings (never in practice — at least one RA family is always present).
     pub fn booleanity_opening_point(&self) -> Option<&[F]> {
-        #[cfg(not(feature = "akita"))]
         let chunk_fallback = None;
-        #[cfg(feature = "akita")]
-        let chunk_fallback = self.booleanity.balanced_inc_digits.first();
         self.booleanity
             .instruction_ra
             .first()
@@ -116,16 +111,8 @@ impl<F: JoltField> Stage6bOutputPoints<F> {
 
     /// The increment claim-reduction opening point (the reversed cycle point shared
     /// by the `RamInc`/`RdInc` reduced openings).
-    #[cfg(not(feature = "akita"))]
     pub fn inc_opening_point(&self) -> &[F] {
         &self.inc_claim_reduction.ram_inc
-    }
-
-    /// The packed fused-inc opening point: the read-raf cycle suffix (the
-    /// stage-6b cycle point).
-    #[cfg(feature = "akita")]
-    pub fn fused_inc_opening_point(&self) -> &[F] {
-        &self.bytecode_read_raf.fused_inc
     }
 
     /// The advice cycle-phase opening point for `kind`, present only when that
@@ -189,7 +176,6 @@ impl<F: JoltField> Stage6bOutputPoints<F> {
     /// runtime bytecode/booleanity point-alias dedup from it to size the committed
     /// output claims. ZK-only, hence base-only (no zk protocol exists over the
     /// packed axis).
-    #[cfg(not(feature = "akita"))]
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "a sum of in-memory vector lengths and small constants cannot overflow usize"
@@ -244,7 +230,6 @@ fn reversed<F: JoltField>(point: &[F]) -> Vec<F> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stage6bCarriedChallenges<F: JoltField> {
     pub instruction_ra_gamma: F,
-    #[cfg(not(feature = "akita"))]
     pub inc_gamma: F,
     /// Committed program mode only: bytecode claim-reduction batching
     /// challenge (the prover's `eta`).

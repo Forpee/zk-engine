@@ -36,7 +36,6 @@ use super::committed_reduction_cycle_phase::{
     BytecodeReductionCyclePhaseChallenges, ProgramImageReductionCyclePhase,
     TrustedAdviceCyclePhase, UntrustedAdviceCyclePhase,
 };
-#[cfg(not(feature = "akita"))]
 use super::inc_claim_reduction::{IncClaimReduction, IncClaimReductionChallenges};
 use super::instruction_ra_virtualization::{
     InstructionRaVirtualization, InstructionRaVirtualizationChallenges,
@@ -96,7 +95,6 @@ pub struct Stage6bBuildParts<'a, F: JoltField> {
 pub struct Stage6bDraws<F> {
     pub instruction_ra_gamma: F,
     /// Base only: the packed batch has no inc claim-reduction member.
-    #[cfg(not(feature = "akita"))]
     pub inc_gamma: F,
     /// The bytecode claim-reduction eta, drawn exactly when the bytecode
     /// layout is committed.
@@ -112,7 +110,6 @@ impl<F: JoltField> Stage6bDraws<F> {
         // declaration order.
         Self {
             instruction_ra_gamma: transcript.challenge_scalar(),
-            #[cfg(not(feature = "akita"))]
             inc_gamma: transcript.challenge_scalar(),
             eta: committed_bytecode.then(|| transcript.challenge_scalar()),
         }
@@ -303,28 +300,12 @@ impl<F: JoltField> Stage6bSumchecks<F> {
         )?;
         let registers_read_write_cycle = stage_points.register_read_write_cycle().to_vec();
         let registers_val_evaluation_cycle = stage_points.register_val_evaluation_cycle().to_vec();
-        #[cfg(not(feature = "akita"))]
         let stage_cycle_points: [Vec<F>; READ_RAF_CYCLE_STAGES] = stage_points.stage_cycle_points;
         // The packed fused-inc consumer points appended to the shared five: the
         // four inc-producing relations' cycle bindings, in stage order (γ^5..8).
         // The register cycle vectors move in here (no clones): the akita build
         // fuses the inc reduction into the read-RAF legs, so no `IncClaimReduction`
         // member consumes them.
-        #[cfg(feature = "akita")]
-        let stage_cycle_points: [Vec<F>; READ_RAF_CYCLE_STAGES] = {
-            let [stage1, stage2, stage3, stage4, stage5] = stage_points.stage_cycle_points;
-            [
-                stage1,
-                stage2,
-                stage3,
-                stage4,
-                stage5,
-                ram_read_write_cycle.to_vec(),
-                ram_val_check_cycle.to_vec(),
-                registers_read_write_cycle,
-                registers_val_evaluation_cycle,
-            ]
-        };
         // The full-program table fold is expected_output-only (absent rows mean
         // ZK or committed mode, where it never runs).
         let bytecode_table_fold =
@@ -383,15 +364,6 @@ impl<F: JoltField> Stage6bSumchecks<F> {
             })?
         };
 
-        #[cfg(feature = "akita")]
-        let booleanity_dimensions =
-            jolt_claims::protocols::jolt::lattice::relations::booleanity::LatticeBooleanityDimensions::new(
-                booleanity_dimensions,
-            )
-            .map_err(|error| VerifierError::StageClaimPublicInputFailed {
-                stage: JoltRelationId::Booleanity,
-                reason: error.to_string(),
-            })?;
         // The little-endian reference cycle is construction geometry (the
         // reversed stage-5 instruction cycle, no draw of its own), so it is
         // rederived from the stage-5 point rather than carried with the
@@ -416,7 +388,6 @@ impl<F: JoltField> Stage6bSumchecks<F> {
             stage5_instruction_cycle.to_vec(),
             committed_chunk_bits,
         );
-        #[cfg(not(feature = "akita"))]
         let inc_claim_reduction = IncClaimReduction::new(
             trace_dimensions,
             ram_read_write_cycle.to_vec(),
@@ -442,7 +413,6 @@ impl<F: JoltField> Stage6bSumchecks<F> {
             ram_hamming_booleanity,
             ram_ra_virtualization,
             instruction_ra_virtualization,
-            #[cfg(not(feature = "akita"))]
             inc_claim_reduction,
             trusted_advice,
             untrusted_advice,
@@ -474,7 +444,6 @@ impl<F: JoltField> Stage6bSumchecks<F> {
             instruction_ra_virtualization: InstructionRaVirtualizationChallenges {
                 gamma: draws.instruction_ra_gamma,
             },
-            #[cfg(not(feature = "akita"))]
             inc_claim_reduction: IncClaimReductionChallenges {
                 gamma: draws.inc_gamma,
             },

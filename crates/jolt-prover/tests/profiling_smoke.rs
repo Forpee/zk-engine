@@ -4,18 +4,9 @@
 //! proves must be present in the trace — so a silent span rename fails CI
 //! rather than drifting.
 //!
-//! Scale 2^13 — fibonacci's minimum guest scale. Label coverage is
-//! scale-independent. Compiled with the `akita` feature the same run drives
-//! the packed prover and asserts its presence set (and the `_akita`-suffixed
-//! artifact names).
+//! Scale 2^13. Label coverage is scale-independent.
 //!
-//! NOT wired into CI yet: the reference backend's naive RAM kernels retain
-//! ~18 GiB regardless of trace length (`ram_K` is priced off the guest's
-//! default 32 MB heap, not the trace), which exceeds hosted-runner memory.
-//! Hook up a dedicated `rust.yml` job (guest toolchain + jolt CLI, like the
-//! legacy test jobs) once an optimized backend fits runner memory.
-//!
-//! Run explicitly (needs the guest toolchain, like the byte-diff harness):
+//! Run explicitly:
 //! `cargo nextest run -p jolt-prover --features profiling -E 'binary(profiling_smoke)'`
 
 #![cfg(feature = "profiling")]
@@ -38,15 +29,10 @@ fn profile_run_emits_conformant_artifacts() {
     let trace_path = artifacts.trace_path.expect("trace path");
     let summary_path = artifacts.summary_path.expect("summary path");
     // Artifacts are grouped into a per-run directory
-    // (benchmark-runs/{timestamp}_modular_fibonacci_13/, suffixed `_akita`
-    // on the packed build), with the `latest_` link pointing at this run;
-    // the directory name carries the run identity, so the files inside use
-    // fixed names.
-    let stem = if cfg!(feature = "akita") {
-        "modular_fibonacci_akita_13"
-    } else {
-        "modular_fibonacci_13"
-    };
+    // (benchmark-runs/{timestamp}_modular_fibonacci_13/), with the `latest_`
+    // link pointing at this run; the directory name carries the run
+    // identity, so the files inside use fixed names.
+    let stem = "modular_fibonacci_13";
     assert_eq!(trace_path.file_name().unwrap(), "trace.json");
     assert_eq!(summary_path.file_name().unwrap(), "summary.json");
     assert_eq!(summary_path.parent(), trace_path.parent());
@@ -79,12 +65,9 @@ fn profile_run_emits_conformant_artifacts() {
 
     // Every always-present taxonomy-v1 label fired, for the mode this
     // prover was compiled in — the `zk` feature swaps the uni-skip and
-    // stage-8 opening seams for their committed siblings, and the `akita`
-    // feature swaps the commitment seams for the packed set. (The advice
-    // seams are exempt: fibonacci exercises no advice.)
-    let mode = if cfg!(feature = "akita") {
-        taxonomy::ProverMode::Akita
-    } else if cfg!(feature = "zk") {
+    // stage-8 opening seams for their committed siblings. (The advice seams
+    // are exempt: fibonacci exercises no advice.)
+    let mode = if cfg!(feature = "zk") {
         taxonomy::ProverMode::Zk
     } else {
         taxonomy::ProverMode::Clear

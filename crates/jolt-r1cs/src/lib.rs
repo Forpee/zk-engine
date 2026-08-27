@@ -6,9 +6,7 @@
 //! - [`R1csKey`] — preprocessed key combining matrices with runtime dimensions
 //! - [`R1csSource`] — materializes R1CS-derived polynomials (Az, Bz, Cz, etc.)
 //! - [`R1csColumn`] — names the derived polynomial columns (Az/Bz/Cz/…)
-//! - [`constraints::rv64`] — Jolt RV64IMAC variable layout and dimension constants
 //! - [`constraints::wasm`] — Jolt WebAssembly variable layout and uniform constraints
-//! - [`constraints::field_constraints`] — native field-inline constraint layout
 //! - [`constraints::jolt`] — compile-time feature-gated composition of Jolt R1CS constraints
 
 // In the jolt-verifier runtime closure: stricter panic and unsafe discipline

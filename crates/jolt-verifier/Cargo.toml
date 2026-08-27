@@ -17,10 +17,7 @@ default = ["transcript-blake2b"]
 # harness's per-stage SVGs).
 allocative = ["dep:allocative", "jolt-claims/allocative"]
 fs-audit = []
-field-inline = ["jolt-claims/field-inline", "jolt-r1cs/field-inline"]
 zk = []
-# Inert until the packed (lattice/Akita) mode is deleted with the RISC-V crates.
-akita = ["jolt-claims/akita"]
 transcript-blake2b = []
 transcript-keccak = []
 transcript-poseidon = []

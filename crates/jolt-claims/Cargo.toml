@@ -13,8 +13,6 @@ default = []
 # Inert: the lattice and field-inline protocols were RV64-only and are gone;
 # the features remain so dependents' feature lists keep resolving until the
 # RISC-V crates are deleted.
-akita = []
-field-inline = []
 # Heap flamegraph visitation of the relation claim structs (profile harness).
 allocative = ["dep:allocative"]
 test-utils = []

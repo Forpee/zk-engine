@@ -72,7 +72,7 @@ impl InstructionOperandRow {
             F::from_u64(self.left_lookup_operand.0),
             F::from_u128(self.right_lookup_operand.0),
             F::from_u64(self.left_instruction_input.0),
-            F::from_i128(self.right_instruction_input.0),
+            F::from_u64(self.right_instruction_input.0),
         ]
     }
 }
@@ -143,16 +143,11 @@ impl<F: JoltField> OptimizedInstructionClaimReductionKernel<F> {
         ];
         // The combine runs on the native scalars through the wide accumulator
         // — one 4×1 fused multiply per u64 limb and a single reduction, no
-        // per-operand Montgomery conversion. The wide lanes split limb-wise
-        // against `2^64`-shifted coefficient copies, the signed lane folds its
-        // sign into the coefficient: exactly `Σ_i γ^i·F(o_i)` by
-        // distributivity.
+        // per-operand Montgomery conversion. The wide lane splits limb-wise
+        // against a `2^64`-shifted coefficient copy: exactly `Σ_i γ^i·F(o_i)`
+        // by distributivity.
         let shift_64 = F::from_u128(1u128 << 64);
         let right_lookup_hi = gamma_powers[2] * shift_64;
-        let right_input_coeffs = {
-            let positive = (gamma_powers[4], gamma_powers[4] * shift_64);
-            ((-positive.0, -positive.1), positive)
-        };
         let combine = |row: &InstructionOperandRow| -> F {
             let mut acc = F::Accumulator::default();
             acc.fmadd_u64(gamma_powers[0], row.lookup_output.0);
@@ -161,15 +156,7 @@ impl<F: JoltField> OptimizedInstructionClaimReductionKernel<F> {
             acc.fmadd_u64(gamma_powers[2], right_lookup as u64);
             acc.fmadd_u64(right_lookup_hi, (right_lookup >> 64) as u64);
             acc.fmadd_u64(gamma_powers[3], row.left_instruction_input.0);
-            let right_input = row.right_instruction_input.0;
-            let magnitude = right_input.unsigned_abs();
-            let (lo, hi) = if right_input < 0 {
-                right_input_coeffs.0
-            } else {
-                right_input_coeffs.1
-            };
-            acc.fmadd_u64(lo, magnitude as u64);
-            acc.fmadd_u64(hi, (magnitude >> 64) as u64);
+            acc.fmadd_u64(gamma_powers[4], row.right_instruction_input.0);
             acc.reduce()
         };
         #[cfg(feature = "parallel")]
@@ -392,9 +379,8 @@ mod tests {
 
     fn assert_parity(log_t: usize, seed: u64) {
         let mut state = seed;
-        // Native operand rows (the production shape), including negative
-        // right instruction inputs; the reference tables are their exact
-        // field images.
+        // Native operand rows (the production shape); the reference tables
+        // are their exact field images.
         let rows: Vec<InstructionOperandRow> = (0..1usize << log_t)
             .map(|_| InstructionOperandRow {
                 lookup_output: LookupOutput(splitmix(&mut state)),
@@ -403,9 +389,7 @@ mod tests {
                     (u128::from(splitmix(&mut state)) << 64) | u128::from(splitmix(&mut state)),
                 ),
                 left_instruction_input: LeftInstructionInput(splitmix(&mut state)),
-                right_instruction_input: RightInstructionInput(
-                    i128::from(splitmix(&mut state) as i64) - (1i128 << 64),
-                ),
+                right_instruction_input: RightInstructionInput(splitmix(&mut state)),
             })
             .collect();
         let tables: Vec<Vec<Fr>> = (0..5)

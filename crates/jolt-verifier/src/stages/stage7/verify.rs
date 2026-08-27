@@ -170,15 +170,6 @@ pub fn build_stage7_sumchecks<F: JoltField>(
     )?;
     let (booleanity_r_address, booleanity_r_cycle) =
         booleanity_opening.split_at(hamming_dimensions.log_k_chunk);
-    #[cfg(feature = "akita")]
-    if stage6_points.fused_inc_opening_point() != booleanity_r_cycle {
-        return Err(VerifierError::StageClaimPublicInputFailed {
-            stage: JoltRelationId::HammingWeightClaimReduction,
-            reason:
-                "the read-raf FusedInc opening and Booleanity do not share the Stage 6b cycle point"
-                    .to_string(),
-        });
-    }
     let hamming = HammingWeightClaimReduction::new(
         hamming_dimensions,
         booleanity_r_cycle.to_vec(),

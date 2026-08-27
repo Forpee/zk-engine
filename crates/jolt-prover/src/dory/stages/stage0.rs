@@ -8,9 +8,8 @@
 //! construction. The commitment compute is delegated to the `jolt-kernels`
 //! witness-commitment kernel; only the absorbs happen here.
 
-use common::jolt_device::JoltDevice;
+use jolt_claims::protocols::jolt::JoltCommittedPolynomial;
 use jolt_claims::protocols::jolt::JoltPolynomialId;
-use jolt_claims::protocols::jolt::{JoltCommittedPolynomial, TracePolynomialOrder};
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
 use jolt_kernels::reference::bytecode_read_raf::BytecodeReadRafWitness;
@@ -23,9 +22,9 @@ use jolt_verifier::{
     absorb_committed_program_commitments, absorb_transcript_commitments,
     absorb_transcript_preamble, validate_inputs_from_parts, CheckedInputs, ProofTranscriptConfig,
 };
+use jolt_wasm_program::PublicIo;
 use jolt_witness::{validate_servable, JoltWitnessOracle, RowSource, WitnessBundle};
 
-use crate::config::advice_total_vars;
 use crate::{CommittedProgramCandidates, JoltProverPreprocessing, ProverConfig, ProverError};
 
 /// The externally supplied trusted-advice commitment (produced at
@@ -66,7 +65,7 @@ pub fn prove_stage0<F, PCS, VC, T, W>(
     config: &ProverConfig,
     trusted_advice: Option<&TrustedAdviceCommitment<PCS>>,
     witness: &W,
-    public_io: &JoltDevice,
+    public_io: &PublicIo,
 ) -> Result<Stage0Output<PCS, T>, ProverError<F>>
 where
     F: JoltField,
@@ -97,17 +96,6 @@ where
             reason: "committed-program preprocessing was built for a different trace layout",
         });
     }
-    let untrusted_advice_present = !public_io.untrusted_advice.is_empty();
-    // Trusted-advice presence rides on the external commitment argument;
-    // require it to agree with the advice bytes so a mismatch fails here
-    // rather than as an opaque stage-4 sumcheck error (bytes without a
-    // commitment) or as a nonstandard proof over the zero advice polynomial
-    // (a commitment without bytes).
-    if trusted_advice.is_some() == public_io.trusted_advice.is_empty() {
-        return Err(ProverError::Unsupported {
-            reason: "trusted-advice commitment presence disagrees with the trusted advice bytes",
-        });
-    }
     // The verifier's own input validation doubles as the prover's self-check
     // and produces the normalized `CheckedInputs` the preamble absorbs. The
     // zk axis is the compiled feature — the co-compiled verifier's
@@ -121,34 +109,9 @@ where
         config.trace_polynomial_order,
         config.one_hot_config,
         trusted_advice.is_some(),
-        untrusted_advice_present,
+        false,
         cfg!(feature = "zk"),
     )?;
-
-    // The dominant-advice regime (an advice grid wider than every other
-    // commitment-grid candidate) has no e2e coverage anywhere; guard it off
-    // until an oracle-backed test exists. Committed-program candidates count
-    // toward the grid width, so advice wider than the main matrix but inside
-    // a committed candidate is fine.
-    {
-        let mut grid_without_advice =
-            config.one_hot_config.committed_chunk_bits() + config.trace_length.ilog2() as usize;
-        if let Some(candidates) = CommittedProgramCandidates::from_schedule(&checked.precommitted) {
-            grid_without_advice = grid_without_advice
-                .max(candidates.bytecode_chunk_vars)
-                .max(candidates.program_image_vars);
-        }
-        let advice_dominates = |max_size: u64| advice_total_vars(max_size) > grid_without_advice;
-        if (trusted_advice.is_some()
-            && advice_dominates(public_io.memory_layout.max_trusted_advice_size))
-            || (untrusted_advice_present
-                && advice_dominates(public_io.memory_layout.max_untrusted_advice_size))
-        {
-            return Err(ProverError::Unsupported {
-                reason: "dominant advice (advice grid wider than the main commitment grid) is not yet supported",
-            });
-        }
-    }
 
     let mut transcript = T::new(b"Jolt");
     absorb_transcript_preamble(
@@ -182,12 +145,9 @@ where
     validate_servable(witness as &dyn JoltWitnessOracle<F>, requested)?;
 
     let grid = CommitmentGrid {
-        total_vars: config.commitment_total_vars(
-            &public_io.memory_layout,
-            trusted_advice.is_some(),
-            untrusted_advice_present,
-            CommittedProgramCandidates::from_schedule(&checked.precommitted),
-        ),
+        total_vars: config.commitment_total_vars(CommittedProgramCandidates::from_schedule(
+            &checked.precommitted,
+        )),
         log_t: config.trace_length.ilog2() as usize,
         log_k_chunk: config.one_hot_config.committed_chunk_bits(),
         order: config.trace_polynomial_order,
@@ -211,37 +171,9 @@ where
     })?;
     let (commitments, mut hints) = assemble_commitments::<PCS>(committed)?;
 
-    // The untrusted advice polynomial is committed at prove time in its OWN
-    // balanced grid (its variable count comes from the memory layout's maximum
-    // advice size, independent of the main grid); the trusted commitment
-    // arrived from preprocessing.
-    let untrusted_advice_commitment = if untrusted_advice_present {
-        let advice_grid = CommitmentGrid {
-            total_vars: advice_total_vars(public_io.memory_layout.max_untrusted_advice_size),
-            log_t: 0,
-            log_k_chunk: 0,
-            // Advice grids always place cycle-major — see `CommitmentGrid`.
-            order: TracePolynomialOrder::CycleMajor,
-        };
-        // Backend-neutral seam span, like `commit_witness` above.
-        let advice = tracing::info_span!(
-            "commit_advice",
-            id = ?JoltCommittedPolynomial::UntrustedAdvice
-        )
-        .in_scope(|| {
-            backend.commit.commit_advice(
-                session,
-                witness as &dyn JoltWitnessOracle<F>,
-                JoltCommittedPolynomial::UntrustedAdvice,
-                advice_grid,
-                &preprocessing.pcs_setup,
-            )
-        })?;
-        hints.push((advice.id, advice.hint));
-        Some(advice.commitment)
-    } else {
-        None
-    };
+    // The WASM layout has no advice regions: `validate_inputs` rejects
+    // advice commitments, so no untrusted advice polynomial is ever committed.
+    let untrusted_advice_commitment = None;
     if let Some(trusted) = trusted_advice {
         hints.push((JoltCommittedPolynomial::TrustedAdvice, trusted.hint.clone()));
     }

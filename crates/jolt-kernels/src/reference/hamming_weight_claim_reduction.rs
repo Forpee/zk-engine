@@ -51,32 +51,12 @@ impl<F: JoltField> PrepareKernel<F, HammingWeightClaimReduction<F>> for Referenc
                 reason: "hamming reduction reference point shapes disagree with the layout",
             });
         }
-        // Digit-zero virtualization (lattice shape only): the committed
-        // polynomial of every constant-activation family omits its row-zero
-        // cells, so the reduced claim opens the pushforward with the
-        // digit-zero row zeroed (`specs/digit-zero-virtualization.md`). RAM
-        // keeps the base fully-committed treatment.
-        let virtualizes_digit_zero = |id: &jolt_claims::protocols::jolt::JoltOpeningId| {
-            super::lattice_shape()
-                && matches!(
-                    id.polynomial_id(),
-                    JoltPolynomialId::Committed(
-                        JoltCommittedPolynomial::InstructionRa(_)
-                            | JoltCommittedPolynomial::BytecodeRa(_)
-                            | JoltCommittedPolynomial::BalancedIncDigit(_)
-                            | JoltCommittedPolynomial::BalancedIncCarry,
-                    )
-                )
-        };
         let mut opening_tables = BTreeMap::new();
         for opening in dimensions
             .layout
             .openings(JoltRelationId::HammingWeightClaimReduction)
         {
-            let mut table = cycle_fold(witness, opening, dimensions.log_k_chunk, r_cycle)?;
-            if virtualizes_digit_zero(&opening) {
-                table[0] = F::zero();
-            }
+            let table = cycle_fold(witness, opening, dimensions.log_k_chunk, r_cycle)?;
             let _ = opening_tables.insert(opening, Polynomial::new(table));
         }
 
@@ -112,11 +92,7 @@ impl<F: JoltField> PrepareKernel<F, HammingWeightClaimReduction<F>> for Referenc
                             )
                         ) && !opening_tables.contains_key(id)
                         {
-                            let mut table =
-                                cycle_fold(witness, *id, dimensions.log_k_chunk, r_cycle)?;
-                            if virtualizes_digit_zero(id) {
-                                table[0] = F::zero();
-                            }
+                            let table = cycle_fold(witness, *id, dimensions.log_k_chunk, r_cycle)?;
                             let _ = opening_tables.insert(*id, Polynomial::new(table));
                         }
                     }

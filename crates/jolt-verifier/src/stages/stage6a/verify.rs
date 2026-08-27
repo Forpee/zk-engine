@@ -116,16 +116,6 @@ where
         &stage4.clear()?.output_values,
         &stage5.clear()?.output_values,
     );
-    #[cfg(feature = "akita")]
-    let base_input_values =
-        jolt_claims::protocols::jolt::lattice::relations::read_raf::LatticeReadRafAddressPhaseInputClaims {
-            base: base_input_values,
-            inc: crate::stages::stage6b::inc_claim_reduction::inc_claim_reduction_input_values_from_upstream(
-                &stage2.clear()?.output_values,
-                &stage4.clear()?.output_values,
-                &stage5.clear()?.output_values,
-            ),
-        };
     let address_input_values = Stage6aInputClaims {
         bytecode_read_raf: base_input_values,
         booleanity: BooleanityAddressPhaseInputClaims::default(),

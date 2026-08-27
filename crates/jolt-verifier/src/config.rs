@@ -13,12 +13,6 @@ use crate::VerifierError;
 /// Pedersen generator capacity BlindFold needs from the vector commitment.
 pub const MAX_BLINDFOLD_GENERATORS: usize = 32;
 
-#[cfg(all(feature = "zk", feature = "akita"))]
-compile_error!(
-    "the `zk` and `akita` features are mutually exclusive: no zk protocol exists over the \
-     packed commitment axis (a lattice-friendly hiding commitment is a future workstream)"
-);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ZkConfig {
     Transparent,
@@ -71,17 +65,8 @@ pub const SELECTED_ZK_CONFIG: ZkConfig = ZkConfig::BlindFold;
 #[cfg(not(feature = "zk"))]
 pub const SELECTED_ZK_CONFIG: ZkConfig = ZkConfig::Transparent;
 
-#[cfg(feature = "akita")]
-pub const SELECTED_COMMITMENT_CONFIG: CommitmentConfig = CommitmentConfig::Packed;
-
-#[cfg(not(feature = "akita"))]
 pub const SELECTED_COMMITMENT_CONFIG: CommitmentConfig = CommitmentConfig::Homomorphic;
 
-#[cfg(feature = "akita")]
-pub const SELECTED_SCALAR_CHALLENGE_ENDIANNESS: ScalarChallengeEndianness =
-    ScalarChallengeEndianness::Little;
-
-#[cfg(not(feature = "akita"))]
 pub const SELECTED_SCALAR_CHALLENGE_ENDIANNESS: ScalarChallengeEndianness =
     ScalarChallengeEndianness::Big;
 

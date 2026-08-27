@@ -100,9 +100,9 @@ where
     }
 
     let public_eval = public_initial_ram_evaluation(checked, &preprocessing.verifier, r_address)?;
-    // The prover-side untrusted-advice presence signal (the verifier reads the
-    // proof's commitment slot).
-    let untrusted_advice_present = !checked.public_io.untrusted_advice.is_empty();
+    // The WASM layout has no advice regions (`validate_inputs` rejects advice
+    // commitments), so the init structure never carries an advice block.
+    let untrusted_advice_present = false;
     let init_structure =
         ram_val_check_init_structure(checked, untrusted_advice_present, r_address, public_eval)?;
     // The committed program-image contribution: the image words' block MLE at
@@ -120,12 +120,9 @@ where
             // The full program rides the witness plane (witness generation
             // requires it in every mode, including committed-program runs
             // whose PREPROCESSING retains only commitments).
-            let program = witness.program_preprocessing();
+            let image = witness.program_preprocessing().program_image();
             let value = sparse_segments_mle_msb(
-                std::iter::once((
-                    layout.start_index() as u128,
-                    program.ram.bytecode_words.as_slice(),
-                )),
+                std::iter::once((layout.start_index() as u128, image.words.as_slice())),
                 point,
             );
             Ok::<_, ProverError<F>>((point.clone(), value))

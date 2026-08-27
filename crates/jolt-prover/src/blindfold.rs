@@ -18,7 +18,6 @@
 //! public parts plus the stage domains — protocol constants this crate's own
 //! stage recipes prove over.
 
-use common::jolt_device::JoltDevice;
 use jolt_blindfold::{BlindFoldProof, BlindFoldProtocol, BlindFoldWitness};
 use jolt_claims::protocols::jolt::geometry::dimensions::{
     OUTER_UNISKIP_DOMAIN_SIZE, PRODUCT_UNISKIP_DOMAIN_SIZE,
@@ -35,6 +34,7 @@ use jolt_verifier::stages::{
     stage1, stage2, stage3, stage4, stage5, stage6a, stage6b, stage7, stage8,
 };
 use jolt_verifier::VerifierError;
+use jolt_wasm_program::PublicIo;
 
 use crate::{JoltProverPreprocessing, ProverError};
 
@@ -99,7 +99,7 @@ pub(crate) struct ZkFinalOpening<F> {
 /// at the stage-8 boundary — the replay must land on the same bytes.
 pub(crate) fn prove_blindfold<F, PCS, VC, T>(
     preprocessing: &JoltProverPreprocessing<PCS, VC>,
-    public_io: &JoltDevice,
+    public_io: &PublicIo,
     trusted_advice_commitment: Option<&PCS::Output>,
     shell: &JoltProof<PCS, VC, ()>,
     witnesses: &ZkStageWitnesses<F>,
@@ -174,7 +174,7 @@ where
 )]
 fn replay_stages<F, PCS, VC, T>(
     preprocessing: &jolt_verifier::JoltVerifierPreprocessing<PCS, VC>,
-    public_io: &JoltDevice,
+    public_io: &PublicIo,
     shell: &JoltProof<PCS, VC, ()>,
     trusted_advice_commitment: Option<&PCS::Output>,
 ) -> Result<(BlindFoldProtocol<F, VC::Output>, T), ProverError<F>>
@@ -223,7 +223,6 @@ where
     )?;
     let stage6a = stage6a::verify(
         &checked,
-        preprocessing,
         shell,
         &formula_dimensions,
         &mut transcript,

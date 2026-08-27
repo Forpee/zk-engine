@@ -4,7 +4,7 @@
 
 Just One Lookup Table.
 
-Jolt is a zkVM (zero-knowledge virtual machine) for RISC-V, built to be the simplest, fastest, and most extensible general-purpose of its kind. This repository currently contains an implementation of Jolt for the RISC-V 64-bit Base Integer Instruction Set + M Standard Extension for Integer Multiplication and Division + A Standard Extension for Atomic Operations + C Standard Extension for Compressed Instructions (RV64IMAC). _Contributors are welcome!_
+This repository is a **zkWASM** built on the Jolt proving stack: a WebAssembly module is lowered to a register-machine IR (`crates/jolt-wasm-frontend`), executed into a per-instruction record (`crates/jolt-wasm-backend`), and proved with Jolt's sumcheck / Twist–Shout / Dory pipeline (`crates/jolt-prover`, `crates/jolt-verifier`). The RISC-V (RV64IMAC) target has been removed; see `specs/zkwasm-frontend.md` and `CLAUDE.md`. _Contributors are welcome!_
 
 ## Resources
 

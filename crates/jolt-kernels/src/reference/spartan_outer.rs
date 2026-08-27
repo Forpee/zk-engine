@@ -127,7 +127,7 @@ impl<F: JoltField> SpartanOuterKernel<F> {
         tau: &[F],
         witness: &dyn JoltWitnessOracle<F>,
     ) -> Result<Self, KernelError<F>> {
-        let dimensions = SpartanOuterDimensions::rv64(log_t);
+        let dimensions = SpartanOuterDimensions::wasm(log_t);
         let input_tables = materialize_input_tables(witness, &dimensions)?;
         let matrices = spartan_outer_constraints::<F>();
         let (az_rows, bz_rows) = row_value_tables(&matrices, &input_tables);
@@ -276,7 +276,7 @@ impl<F: JoltField> SpartanOuterKernel<F> {
             Polynomial::new(stream_pair_lsb(bz_constant, cycles)),
         );
 
-        let dimensions = SpartanOuterDimensions::rv64(self.log_t);
+        let dimensions = SpartanOuterDimensions::wasm(self.log_t);
         let opening_tables: BTreeMap<JoltOpeningId, Polynomial<F>> = dimensions
             .variables()
             .iter()

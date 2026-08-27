@@ -6,8 +6,8 @@
 //! [`jolt_wasm_ir::layout`].
 
 use jolt_wasm_ir::layout::{
-    ram_end, GLOBALS_BASE, INPUTS_BASE, MEMORY_SIZE_ADDR, OUTPUTS_BASE, PAGE_SIZE, RAM_BASE,
-    TERMINATION_ADDR, WORD_BYTES,
+    ram_end, GLOBALS_BASE, INPUTS_BASE, MEMORY_SIZE_ADDR, OUTPUTS_BASE, OUTPUTS_SIZE, PAGE_SIZE,
+    RAM_BASE, TERMINATION_ADDR, WORD_BYTES,
 };
 use jolt_wasm_ir::MemoryLimits;
 
@@ -56,11 +56,20 @@ impl ProgramImage {
         Self { start_index, words }
     }
 
-    /// One past the last image word's index.
+    /// One past the last image word's index; `0` for an empty image (no
+    /// RAM word is program data).
     pub fn end_index(&self) -> u64 {
-        self.start_index + self.words.len() as u64
+        if self.words.is_empty() {
+            0
+        } else {
+            self.start_index + self.words.len() as u64
+        }
     }
 }
+
+/// One past the last public I/O word's index: the RAM domain every proof
+/// covers.
+pub const IO_END_INDEX: u64 = word_index(OUTPUTS_BASE + OUTPUTS_SIZE);
 
 /// The public words the final memory must hold, and the I/O window
 /// `[io_mask_start, io_mask_end)` — termination word, inputs, outputs —
@@ -76,7 +85,7 @@ pub struct PublicIoMemory {
 impl PublicIoMemory {
     pub fn new(io: &PublicIo) -> Self {
         let io_mask_start = u128::from(word_index(TERMINATION_ADDR));
-        let io_mask_end = u128::from(word_index(GLOBALS_BASE));
+        let io_mask_end = u128::from(IO_END_INDEX);
         let io_num_vars = io_mask_end.next_power_of_two().max(1).ilog2() as usize;
         let mut segments = vec![PublicMemorySegment {
             start_index: io_mask_start,
@@ -154,7 +163,7 @@ pub enum RamDomainError {
 /// Smallest power-of-two RAM domain holding the public I/O window and the
 /// program image (`program_image_end_index` words from index zero).
 pub fn min_ram_k(program_image_end_index: u64) -> Result<usize, RamDomainError> {
-    let words = program_image_end_index.max(word_index(GLOBALS_BASE));
+    let words = program_image_end_index.max(IO_END_INDEX);
     usize::try_from(words)
         .ok()
         .and_then(usize::checked_next_power_of_two)

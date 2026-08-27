@@ -8,7 +8,6 @@
 //! `τ_high` draw, the uni-skip); all compute is behind the backend's stage-2
 //! slots.
 
-use common::jolt_device::JoltDevice;
 use jolt_claims::protocols::jolt::geometry::dimensions::{
     PRODUCT_UNISKIP_DOMAIN_SIZE, PRODUCT_UNISKIP_FIRST_ROUND_DEGREE,
 };
@@ -20,7 +19,6 @@ use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
 use jolt_kernels::{JoltBackend, ProofSession};
 use jolt_openings::CommitmentScheme;
-use jolt_program::preprocess::PublicIoMemory;
 #[cfg(feature = "zk")]
 use jolt_sumcheck::CommittedSumcheckWitness;
 use jolt_sumcheck::SumcheckProof;
@@ -41,6 +39,8 @@ use jolt_verifier::stages::stage2::ram_read_write_checking::RamReadWriteChecking
 use jolt_verifier::stages::stage2::{product_tau_low, stage2_batch_input_values_from_upstream};
 use jolt_verifier::stages::uniskip::draw_spartan_product_tau_high;
 use jolt_verifier::VerifierError;
+use jolt_wasm_ir::layout::RAM_BASE;
+use jolt_wasm_program::{PublicIo, PublicIoMemory};
 use jolt_witness::JoltWitnessPlane;
 
 use crate::recorder::ProofMode;
@@ -67,7 +67,7 @@ pub fn prove_stage2<F, PCS, VC, T>(
     session: &mut ProofSession,
     mode: &ProofMode<'_, VC>,
     config: &ProverConfig,
-    public_io: &JoltDevice,
+    public_io: &PublicIo,
     stage1: &Stage1ClearOutput<F>,
     witness: &dyn JoltWitnessPlane<F>,
     transcript: &mut T,
@@ -123,13 +123,8 @@ where
     let uniskip_challenge = proved_uniskip.challenge;
 
     // The generated stage drivers, on the verifier's own batch type.
-    let lowest_address = public_io.memory_layout.get_lowest_address();
-    let public_memory = PublicIoMemory::new(public_io).map_err(|error| {
-        VerifierError::StageClaimPublicInputFailed {
-            stage: JoltRelationId::RamOutputCheck,
-            reason: error.to_string(),
-        }
-    })?;
+    let lowest_address = RAM_BASE;
+    let public_memory = PublicIoMemory::new(public_io);
     let sumchecks = Stage2BatchSumchecks {
         ram_read_write: RamReadWriteChecking::new(read_write_dimensions, log_k, tau_low.clone()),
         product_remainder: ProductRemainder::new(

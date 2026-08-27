@@ -15,7 +15,6 @@ test-utils = []
 parallel = ["dep:rayon", "jolt-utils/parallel"]
 # Inert: the RV64 field-inline witnesses are gone; dependents' feature lists
 # keep resolving until the RISC-V crates are deleted.
-field-inline = []
 
 [dependencies]
 jolt-claims.workspace = true

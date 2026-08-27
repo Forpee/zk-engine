@@ -6,8 +6,8 @@
 //! proof's trace order (`index = order.address_cycle_to_index(lane,
 //! chunk_cycle, lane_capacity, chunk_cycle_len)` — lane plays the address
 //! role): one bytecode row per chunk cycle, one lane per committed row
-//! attribute (the one-hot `rs1`/`rs2`/`rd` blocks, the scalar unexpanded-PC
-//! and immediate lanes, the circuit/instruction flag blocks, the
+//! attribute (the one-hot `rs1`/`rs2`/`rd` blocks, the scalar pc and
+//! immediate lanes, the row-flag block, the
 //! lookup-table selector block, and the RAF flag — [`BYTECODE_LANE_LAYOUT`]).
 //! The same grids back the preprocessing-time chunk commitments, the
 //! stage-6b bytecode claim reduction, and the stage-8 joint opening, so they
@@ -19,68 +19,50 @@ use jolt_claims::protocols::jolt::geometry::claim_reductions::bytecode::{
 };
 use jolt_claims::protocols::jolt::TracePolynomialOrder;
 use jolt_field::JoltField;
-use jolt_lookup_tables::{InstructionLookupTable, XLEN};
-use jolt_riscv::instructions::Noop;
-use jolt_riscv::{
-    Flags, InstructionFlags, InterleavedBitsMarker, JoltInstruction, JoltInstructionRow,
-    CIRCUIT_FLAGS, NUM_INSTRUCTION_FLAGS,
-};
+use jolt_wasm_ir::{BytecodeRow, RowFlag, REGISTER_NONE};
+use jolt_wasm_tables::bytecode_table_id;
 
 use crate::KernelError;
 
-/// `InstructionFlags` in discriminant order (the lane-block order
-/// `jolt-claims`' `lane_weights` addresses by `flag as usize`).
-const INSTRUCTION_FLAG_ORDER: [InstructionFlags; NUM_INSTRUCTION_FLAGS] = [
-    InstructionFlags::LeftOperandIsPC,
-    InstructionFlags::RightOperandIsImm,
-    InstructionFlags::LeftOperandIsRs1Value,
-    InstructionFlags::RightOperandIsRs2Value,
-    InstructionFlags::Branch,
-    InstructionFlags::IsNoop,
-];
-
-/// The sparse `(lane, value)` encoding of one committed bytecode row.
+/// The sparse `(lane, value)` encoding of one committed bytecode row at
+/// bytecode index `pc`: the one-hot register blocks, the pc and immediate
+/// scalars, the row-flag block, the lookup-table selector block, and the
+/// RAF flag — the lane order [`BYTECODE_LANE_LAYOUT`] and the stage folds
+/// `jolt-claims`' `lane_weights` address.
 fn for_each_active_lane_value<F: JoltField>(
-    instruction: &JoltInstructionRow,
+    pc: usize,
+    row: &BytecodeRow,
     mut visit: impl FnMut(usize, F),
 ) {
-    let decoded = JoltInstruction::try_from(*instruction)
-        .unwrap_or(JoltInstruction::Noop(Noop(*instruction)));
-    let circuit_flags = decoded.circuit_flags();
-    let instruction_flags = decoded.instruction_flags();
     let layout = BYTECODE_LANE_LAYOUT;
-
-    if let Some(register) = instruction.operands.rs1 {
-        visit(layout.rs1_start + register as usize, F::one());
+    let register = |start: usize, id: u8| (id != REGISTER_NONE).then(|| start + id as usize);
+    for lane in [
+        register(layout.rs1_start, row.rs1),
+        register(layout.rs2_start, row.rs2),
+        register(layout.rd_start, row.rd),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        visit(lane, F::one());
     }
-    if let Some(register) = instruction.operands.rs2 {
-        visit(layout.rs2_start + register as usize, F::one());
+    let pc = F::from_u64(pc as u64);
+    if !pc.is_zero() {
+        visit(layout.pc_idx, pc);
     }
-    if let Some(register) = instruction.operands.rd {
-        visit(layout.rd_start + register as usize, F::one());
-    }
-    let unexpanded_pc = F::from_u64(instruction.address as u64);
-    if !unexpanded_pc.is_zero() {
-        visit(layout.unexp_pc_idx, unexpanded_pc);
-    }
-    let imm = F::from_i128(instruction.operands.imm);
+    let imm = F::from_i128(row.imm_signed());
     if !imm.is_zero() {
         visit(layout.imm_idx, imm);
     }
-    for (index, flag) in CIRCUIT_FLAGS.into_iter().enumerate() {
-        if circuit_flags[flag] {
-            visit(layout.circuit_start + index, F::one());
+    for (index, flag) in RowFlag::ALL.into_iter().enumerate() {
+        if row.flags.has(flag) {
+            visit(layout.flag_start + index, F::one());
         }
     }
-    for (index, flag) in INSTRUCTION_FLAG_ORDER.into_iter().enumerate() {
-        if instruction_flags[flag] {
-            visit(layout.instr_start + index, F::one());
-        }
+    if let Some(table) = bytecode_table_id(row) {
+        visit(layout.lookup_start + table, F::one());
     }
-    if let Some(table) = InstructionLookupTable::<XLEN>::lookup_table(&decoded) {
-        visit(layout.lookup_start + table.index(), F::one());
-    }
-    if !circuit_flags.is_interleaved_operands() {
+    if row.raf_flag() {
         visit(layout.raf_flag_idx, F::one());
     }
 }
@@ -89,7 +71,7 @@ fn for_each_active_lane_value<F: JoltField>(
 /// the proof's trace order.
 #[tracing::instrument(skip_all, name = "build_committed_bytecode_chunk_coeffs")]
 pub fn build_committed_bytecode_chunk_coeffs<F: JoltField>(
-    instructions: &[JoltInstructionRow],
+    instructions: &[BytecodeRow],
     chunk_count: usize,
     order: TracePolynomialOrder,
 ) -> Result<Vec<Vec<F>>, KernelError<F>> {
@@ -102,15 +84,25 @@ pub fn build_committed_bytecode_chunk_coeffs<F: JoltField>(
         });
     }
     let chunk_cycle_len = bytecode_len / chunk_count;
-    let lane_capacity = COMMITTED_BYTECODE_LANE_CAPACITY;
-    let mut chunk_coeffs: Vec<Vec<F>> = (0..chunk_count)
-        .map(|_| vec![F::zero(); lane_capacity * chunk_cycle_len])
-        .collect();
+    Ok(instructions
+        .chunks(chunk_cycle_len)
+        .enumerate()
+        .map(|(chunk, rows)| build_committed_bytecode_chunk(rows, chunk * chunk_cycle_len, order))
+        .collect())
+}
 
-    for (cycle, instruction) in instructions.iter().enumerate() {
-        let coeffs = &mut chunk_coeffs[cycle / chunk_cycle_len];
-        let chunk_cycle = cycle % chunk_cycle_len;
-        for_each_active_lane_value::<F>(instruction, |lane, value| {
+/// One chunk's coefficient grid: `rows` are the chunk's bytecode rows, the
+/// first at bytecode index `first_pc` (the pc lane carries the global index).
+pub fn build_committed_bytecode_chunk<F: JoltField>(
+    rows: &[BytecodeRow],
+    first_pc: usize,
+    order: TracePolynomialOrder,
+) -> Vec<F> {
+    let chunk_cycle_len = rows.len();
+    let lane_capacity = COMMITTED_BYTECODE_LANE_CAPACITY;
+    let mut coeffs = vec![F::zero(); lane_capacity * chunk_cycle_len];
+    for (chunk_cycle, row) in rows.iter().enumerate() {
+        for_each_active_lane_value::<F>(first_pc + chunk_cycle, row, |lane, value| {
             coeffs[order.address_cycle_to_index(
                 lane,
                 chunk_cycle,
@@ -119,7 +111,7 @@ pub fn build_committed_bytecode_chunk_coeffs<F: JoltField>(
             )] += value;
         });
     }
-    Ok(chunk_coeffs)
+    coeffs
 }
 
 /// The `(lane, cycle)` coordinates of a chunk-grid index in the given trace
@@ -132,8 +124,8 @@ pub fn chunk_index_to_lane_cycle(
     order.index_to_address_cycle(index, COMMITTED_BYTECODE_LANE_CAPACITY, chunk_cycle_len)
 }
 
-/// The committed program-image polynomial's word vector: the RAM-remapped
-/// bytecode words zero-padded to a power of two (at least 2).
+/// The committed program-image polynomial's word vector: the dense program
+/// image words zero-padded to a power of two (at least 2).
 pub fn program_image_words_padded(bytecode_words: &[u64]) -> Vec<u64> {
     let padded_len = bytecode_words.len().next_power_of_two().max(2);
     let mut words = bytecode_words.to_vec();

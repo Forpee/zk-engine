@@ -5,7 +5,7 @@
 //! internals (and the small cfg blocks here that mirror the verifier's own),
 //! so the recipes compile under either feature. The protocol-specific ends of
 //! the pipeline — stage 0 (witness commitment) and stage 8 (the joint
-//! opening) — live with their paths (`crate::dory`, `crate::akita`).
+//! opening) — live with the Dory path (`crate::dory`).
 
 use jolt_claims::protocols::jolt::geometry::dimensions::JoltFormulaDimensions;
 use jolt_claims::protocols::jolt::JoltRelationId;

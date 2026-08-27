@@ -146,10 +146,13 @@ impl<PCS: CommitmentScheme> ProgramPreprocessing<PCS> {
         }
     }
 
-    /// One past the last program-image word's RAM index.
+    /// One past the last program-image word's RAM index; `0` for an empty
+    /// image (no RAM word is program data).
     pub fn program_image_end_index(&self) -> u64 {
-        PROGRAM_IMAGE_START_INDEX
-            .saturating_add(crate::num::u64_from_usize(self.program_image_len_words()))
+        match self.program_image_len_words() {
+            0 => 0,
+            len => PROGRAM_IMAGE_START_INDEX.saturating_add(crate::num::u64_from_usize(len)),
+        }
     }
 }
 
