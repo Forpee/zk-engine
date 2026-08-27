@@ -3,10 +3,8 @@
 //! `ExtractIndexed` index binding — which chunk of which decomposition is
 //! bound at the use site.
 
-use jolt_riscv::JoltTraceRow as TraceRow;
-
 use super::{BytecodePc, Extract, ExtractIndexed, LookupIndex, RemappedRamAddress, WitnessEnv};
-use crate::{WitnessError, JOLT_VM_LABEL};
+use crate::{TraceRow, WitnessError, JOLT_VM_LABEL};
 
 /// Selects one `chunk_bits`-wide chunk of a decomposed address, indexed from
 /// the most significant chunk.
@@ -52,24 +50,21 @@ impl RaChunkSelector {
 }
 
 /// Hot address of one committed `InstructionRa` chunk: the selected chunk of
-/// the instruction's lookup index. Every cycle is hot — no-op rows look up
-/// index 0 — so there is no cold case.
+/// the row's lookup index. Every cycle is hot — rows without a lookup and
+/// padding rows look up index 0 — so there is no cold case.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InstructionRaChunk(pub usize);
 
 /// Hot address of one committed `BytecodeRa` chunk: the selected chunk of
-/// the bytecode PC. Every cycle is hot — [`BytecodePc`] is total, so no-op
-/// rows land on the slot-0 chunk. `RamRaChunk` is the only cold one.
+/// the bytecode pc. Every cycle is hot — padding rows sit on slot 0.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BytecodeRaChunk(pub usize);
 
 /// Hot address of one committed `RamRa` chunk: the selected chunk of the
-/// remapped RAM word address; cold for no-ops and unremappable addresses.
+/// remapped RAM word address; cold for rows without a RAM access.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RamRaChunk(pub Option<usize>);
 
-// A chunk witness is its per-cycle hot address; `None` is a cold cycle.
-// Only RAM has one — instruction and bytecode chunks are hot every cycle.
 impl From<InstructionRaChunk> for Option<usize> {
     fn from(chunk: InstructionRaChunk) -> Self {
         Some(chunk.0)

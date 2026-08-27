@@ -17,23 +17,15 @@ use jolt_poly::EqPlusOnePolynomial;
 
 use crate::stages::relations::ConcreteSumcheck;
 use crate::stages::stage1::Stage1BatchOutputClaims;
-use crate::stages::stage2::Stage2BatchOutputClaims;
 use crate::VerifierError;
 
-/// Wire shift's consumed opening *values* from stage 1's outer sumcheck (`Next*`
-/// PC/flag values) and stage 2's product-remainder `next_is_noop`. Takes the
-/// ZK-agnostic upstream output-claims aggregates.
+/// Wire shift's consumed opening *value* (`NextPC` from stage 1's outer
+/// sumcheck). Takes the ZK-agnostic upstream output-claims aggregate.
 pub fn spartan_shift_input_values_from_upstream<F: JoltField>(
     stage1: &Stage1BatchOutputClaims<F>,
-    stage2: &Stage2BatchOutputClaims<F>,
 ) -> SpartanShiftInputClaims<F> {
-    let outer = &stage1.outer_remainder;
     SpartanShiftInputClaims {
-        next_unexpanded_pc: outer.next_unexpanded_pc,
-        next_pc: outer.next_pc,
-        next_is_virtual: outer.next_is_virtual,
-        next_is_first_in_sequence: outer.next_is_first_in_sequence,
-        next_is_noop: stage2.product_remainder.next_is_noop,
+        next_pc: stage1.outer_remainder.next_pc,
     }
 }
 
@@ -79,13 +71,7 @@ impl<F: JoltField> ConcreteSumcheck<F> for SpartanShift<F> {
         _input_points: &SpartanShiftInputClaims<Vec<F>>,
     ) -> Result<SpartanShiftOutputClaims<Vec<F>>, VerifierError> {
         let opening_point = sumcheck_point.iter().rev().copied().collect::<Vec<_>>();
-        Ok(SpartanShiftOutputClaims {
-            unexpanded_pc: opening_point.clone(),
-            pc: opening_point.clone(),
-            is_virtual: opening_point.clone(),
-            is_first_in_sequence: opening_point.clone(),
-            is_noop: opening_point,
-        })
+        Ok(SpartanShiftOutputClaims { pc: opening_point })
     }
 
     fn derive_output_term(
@@ -99,7 +85,7 @@ impl<F: JoltField> ConcreteSumcheck<F> for SpartanShift<F> {
             return Err(VerifierError::MissingStageClaimDerived { id: *id });
         };
         // Every shift output shares the one shift opening point.
-        let opening_point = output_points.unexpanded_pc();
+        let opening_point = output_points.pc();
         match public_id {
             SpartanShiftPublic::EqPlusOneOuter => Ok(EqPlusOnePolynomial::new(
                 self.product_uniskip_tau_low.clone(),

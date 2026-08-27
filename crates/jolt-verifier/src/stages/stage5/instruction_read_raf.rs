@@ -19,10 +19,10 @@ use jolt_claims::protocols::jolt::{
 };
 use jolt_claims::SymbolicSumcheck;
 use jolt_field::JoltField;
-use jolt_lookup_tables::{LookupTableKind, XLEN as RISCV_XLEN};
 use jolt_poly::{
     try_eq_mle, IdentityPolynomial, MultilinearEvaluation, OperandPolynomial, OperandSide,
 };
+use jolt_wasm_tables::WasmTable;
 
 use crate::stages::relations::ConcreteSumcheck;
 use crate::stages::stage2::{Stage2BatchOutputClaims, Stage2BatchOutputPoints};
@@ -142,8 +142,7 @@ impl<F: JoltField> ConcreteSumcheck<F> for InstructionReadRaf<F> {
             .chunks(chunk_size)
             .map(|chunk| [chunk, opening_point.r_cycle.as_slice()].concat())
             .collect::<Vec<_>>();
-        let lookup_table_flags =
-            vec![opening_point.r_cycle.clone(); LookupTableKind::<RISCV_XLEN>::COUNT];
+        let lookup_table_flags = vec![opening_point.r_cycle.clone(); WasmTable::COUNT];
         Ok(InstructionReadRafOutputClaims {
             lookup_table_flags,
             instruction_ra,
@@ -186,11 +185,9 @@ impl<F: JoltField> ConcreteSumcheck<F> for InstructionReadRaf<F> {
         let gamma2 = gamma * gamma;
         match public {
             InstructionReadRafPublic::EqTableValue(index) => {
-                let table = LookupTableKind::<RISCV_XLEN>::iter()
-                    .find(|table| table.index() == *index)
-                    .ok_or_else(|| {
-                        public_input_failed(format!("unknown lookup table index {index}"))
-                    })?;
+                let table = WasmTable::from_index(*index).ok_or_else(|| {
+                    public_input_failed(format!("unknown lookup table index {index}"))
+                })?;
                 Ok(eq_reduction * table.evaluate_mle::<F, F>(&r_address))
             }
             InstructionReadRafPublic::EqRafConstant => {

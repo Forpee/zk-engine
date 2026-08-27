@@ -3,12 +3,12 @@
 //! lookup, flags — so the recorded witness is the row model by construction;
 //! [`crate::row::check_record`] is the constraint-form restatement.
 
-use jolt_wasm_ir::layout::{MEMORY_SIZE_ADDR, SHADOW_STACK_BASE};
+use jolt_wasm_ir::layout::{input_address, output_address, TERMINATION_ADDR};
 use jolt_wasm_ir::{AssertFailure, Ir, IrProgram, Pc, Reg, REGISTER_COUNT};
 
 use crate::error::{ExecutionError, Trap};
 use crate::memory::Memory;
-use crate::row::{Lookup, RowFlags, RowModel, RowSpec};
+use jolt_wasm_ir::row::{Lookup, RowFlag, RowModel, RowSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegisterRead {
@@ -62,7 +62,11 @@ pub struct Record {
 #[derive(Debug, Clone)]
 pub struct Execution {
     pub records: Vec<Record>,
+    /// The public output words.
     pub results: Vec<u64>,
+    /// Whether the entry stub set the termination word (always true for a
+    /// run that returned `Ok`; the field is the public-output view of it).
+    pub terminated: bool,
     pub memory: Memory,
 }
 
@@ -102,82 +106,62 @@ impl<'a> Machine<'a> {
         self
     }
 
-    /// Run the module's start function (if any), then the exported function
-    /// `name` with `args`, recording every executed instruction.
+    /// Run the exported function `name` with `args` through its entry stub,
+    /// recording every executed instruction as one contiguous trace.
     ///
-    /// Each host-level call is one *segment* of the record stream: it begins
-    /// with the registers initialized by [`Machine::call`] and ends with the
-    /// [`Ir::Halt`] record the callee returns to. The pc chains within a
-    /// segment; the start-function segment (when present) precedes the entry
-    /// segment.
+    /// The host's only actions are outside the trace: it writes `args` to
+    /// the public input words before execution and reads the results from
+    /// the public output words after. Registers start at zero; the stub sets
+    /// `SP`, runs `start`, calls the function, stores the results, sets the
+    /// termination word, and jumps to the [`Ir::Halt`] trampoline at pc 0.
     pub fn invoke(mut self, name: &str, args: &[u64]) -> Result<Execution, ExecutionError> {
         let function = *self
             .program
             .exports
             .get(name)
             .ok_or_else(|| ExecutionError::UnknownExport(name.to_owned()))?;
-        let mut records = Vec::new();
-        if let Some(start) = self.program.start {
-            let _ = self.call(start, &[], &mut records)?;
-        }
-        let expected = self.function_params(function);
-        if args.len() != expected {
-            return Err(ExecutionError::ArgumentCount {
-                name: name.to_owned(),
-                expected,
-                actual: args.len(),
-            });
-        }
-        let results = self.call(function, args, &mut records)?;
-        Ok(Execution {
-            records,
-            results,
-            memory: self.memory,
-        })
-    }
-
-    fn function_params(&self, function: u32) -> usize {
-        self.program
-            .functions
-            .get(function as usize)
-            .map_or(0, |f| f.params as usize)
-    }
-
-    /// Host-side call: mimics the lowered call sequence's post-state (return
-    /// address on the shadow stack, `SP` past it, parameters in frame slots)
-    /// so the callee's `return` lands on the halt trampoline.
-    fn call(
-        &mut self,
-        function: u32,
-        args: &[u64],
-        records: &mut Vec<Record>,
-    ) -> Result<Vec<u64>, ExecutionError> {
-        let trap = |trap| ExecutionError::Trap {
-            pc: IrProgram::HALT_PC,
-            trap,
-        };
+        let entry = *self
+            .program
+            .entries
+            .get(name)
+            .ok_or_else(|| ExecutionError::UnknownExport(name.to_owned()))?;
         let f = self
             .program
             .functions
             .get(function as usize)
-            .ok_or_else(|| trap(Trap::InvalidJump(u64::from(function))))?;
-        self.regs = [0; REGISTER_COUNT];
-        let _ = self
-            .memory
-            .write_word(SHADOW_STACK_BASE, u64::from(IrProgram::HALT_PC))
-            .map_err(trap)?;
-        self.regs[Reg::SP.index()] = SHADOW_STACK_BASE + 8;
-        for (i, arg) in args.iter().enumerate() {
-            let reg = Reg::frame_slot(i).ok_or_else(|| trap(Trap::CallStackExhausted))?;
-            self.regs[reg.index()] = *arg;
+            .ok_or_else(|| ExecutionError::UnknownExport(name.to_owned()))?;
+        let (params, results) = (f.params as usize, f.results as usize);
+        if args.len() != params {
+            return Err(ExecutionError::ArgumentCount {
+                name: name.to_owned(),
+                expected: params,
+                actual: args.len(),
+            });
         }
-        self.pc = f.entry;
-        let results = f.results as usize;
-        self.run(records)?;
-        Ok((0..results)
-            .filter_map(Reg::temp)
-            .map(|r| self.regs[r.index()])
-            .collect())
+        let host = |trap| ExecutionError::Trap {
+            pc: IrProgram::HALT_PC,
+            trap,
+        };
+        for (i, arg) in args.iter().enumerate() {
+            let _ = self
+                .memory
+                .write_word(input_address(i as u64), *arg)
+                .map_err(host)?;
+        }
+        self.regs = [0; REGISTER_COUNT];
+        self.pc = entry;
+        let mut records = Vec::new();
+        self.run(&mut records)?;
+        let results = (0..results as u64)
+            .map(|k| self.memory.read_word(output_address(k)).map_err(host))
+            .collect::<Result<Vec<u64>, _>>()?;
+        let terminated = self.memory.read_word(TERMINATION_ADDR).map_err(host)? == 1;
+        Ok(Execution {
+            records,
+            results,
+            terminated,
+            memory: self.memory,
+        })
     }
 
     fn run(&mut self, records: &mut Vec<Record>) -> Result<(), ExecutionError> {
@@ -230,7 +214,7 @@ impl<'a> Machine<'a> {
             .ok_or(Trap::InvalidJump(u64::from(pc)))?;
         let spec: RowSpec = instruction.row_spec();
         let flags = spec.flags;
-        if flags.has(RowFlags::TRAP) {
+        if flags.has(RowFlag::Trap) {
             return Err(Trap::Unreachable);
         }
 
@@ -238,44 +222,34 @@ impl<'a> Machine<'a> {
         let rs2 = spec.rs2.map(|r| self.read(r));
         let rs1_value = rs1.map_or(0, |r| r.value);
         let rs2_value = rs2.map_or(0, |r| r.value);
-        let left = spec.left_input(rs1_value, pc);
+        let left = spec.left_input(rs1_value);
         let right = spec.right_input(rs2_value);
         let output = match spec.lookup {
             Some(Lookup::Table(op)) => op.evaluate(left, right),
-            Some(Lookup::Advice(hint)) => hint.compute(left, right),
+            // Advice is the honest prover's computation from the register
+            // reads; the row's instruction inputs are zero by design.
+            Some(Lookup::Advice(hint)) => hint.compute(rs1_value, rs2_value),
             None => 0,
         };
-        if flags.has(RowFlags::ASSERT) && output != 1 {
+        if flags.has(RowFlag::Assert) && output != 1 {
             return Err(assert_trap(instruction, rs1_value));
         }
 
         let mut ram = RamAccess::NoOp;
         let mut rd_value = None;
         let address = rs1_value.wrapping_add(spec.imm);
-        if flags.has(RowFlags::LOAD) {
+        if flags.has(RowFlag::Load) {
             let value = self.memory.read_word(address)?;
             ram = RamAccess::Read(RamRead { address, value });
             rd_value = Some(value);
-        } else if flags.has(RowFlags::STORE) {
+        } else if flags.has(RowFlag::Store) {
             let pre_value = self.memory.write_word(address, rs2_value)?;
             ram = RamAccess::Write(RamWrite {
                 address,
                 pre_value,
                 post_value: rs2_value,
             });
-        } else if flags.has(RowFlags::MEMORY_GROW) {
-            let old_bytes = self.memory.size_bytes();
-            let (result, new_bytes) = match self.memory.grow(rs1_value) {
-                Some(grown) => (grown.old_pages, grown.new_bytes),
-                None => (u64::from(u32::MAX), old_bytes),
-            };
-            ram = RamAccess::Write(RamWrite {
-                address: MEMORY_SIZE_ADDR,
-                pre_value: old_bytes,
-                post_value: new_bytes,
-            });
-            rd_value = Some(result);
-        } else if flags.has(RowFlags::WRITE_LOOKUP_TO_RD | RowFlags::ADVICE) {
+        } else if flags.intersects(RowFlag::WriteLookupToRd | RowFlag::Advice) {
             rd_value = Some(output);
         }
         let rd = match (spec.rd, rd_value) {
@@ -283,11 +257,11 @@ impl<'a> Machine<'a> {
             _ => None,
         };
 
-        let next_pc = if flags.has(RowFlags::HALT) {
+        let next_pc = if flags.has(RowFlag::Halt) {
             pc
-        } else if flags.has(RowFlags::JUMP) {
+        } else if flags.has(RowFlag::Jump) {
             Pc::try_from(output).map_err(|_| Trap::InvalidJump(output))?
-        } else if flags.has(RowFlags::BRANCH) && output == 1 {
+        } else if flags.has(RowFlag::Branch) && output == 1 {
             spec.imm as Pc
         } else {
             pc + 1

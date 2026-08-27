@@ -176,15 +176,14 @@ mod tests {
     use super::*;
     use crate::stages::relations::draw_recording::{record, DrawEvent};
     use crate::stages::relations::ConcreteSumcheck;
-    use common::jolt_device::{JoltDevice, MemoryConfig};
     use jolt_claims::protocols::jolt::geometry::{
         dimensions::{ReadWriteDimensions, TraceDimensions},
         ram::RamRafEvaluationDimensions,
         spartan::SpartanProductDimensions,
     };
     use jolt_field::{Fr, Ring};
-    use jolt_program::preprocess::PublicIoMemory;
     use jolt_transcript::Transcript;
+    use jolt_wasm_program::{PublicIo, PublicIoMemory};
 
     fn fr(value: u64) -> Fr {
         Fr::from_u64(value)
@@ -195,11 +194,11 @@ mod tests {
         let log_k = 3usize;
         let dimensions = ReadWriteDimensions::new(log_t, log_k, 2, 1);
         let raf_dimensions = RamRafEvaluationDimensions::try_from(dimensions).unwrap();
-        let public_memory = PublicIoMemory::new(&JoltDevice::new(&MemoryConfig {
-            program_size: Some(1024),
-            ..Default::default()
-        }))
-        .unwrap();
+        let public_memory = PublicIoMemory::new(&PublicIo {
+            entry: "main".to_owned(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        });
         Stage2BatchSumchecks::<Fr> {
             ram_read_write: RamReadWriteChecking::new(dimensions, log_k, Vec::new()),
             product_remainder: ProductRemainder::new(
@@ -276,22 +275,18 @@ mod tests {
             product_remainder: ProductRemainderOutputClaims {
                 left_instruction_input: fr(4),
                 right_instruction_input: fr(5),
-                jump_flag: fr(6),
-                write_lookup_output_to_rd: fr(7),
-                lookup_output: fr(8),
-                branch_flag: fr(9),
-                next_is_noop: fr(10),
-                virtual_instruction: fr(11),
+                lookup_output: fr(6),
+                branch_flag: fr(7),
             },
             instruction_claim_reduction: InstructionClaimReductionOutputClaims {
-                lookup_output: fr(8),
-                left_lookup_operand: fr(12),
-                right_lookup_operand: fr(13),
+                lookup_output: fr(6),
+                left_lookup_operand: fr(8),
+                right_lookup_operand: fr(9),
                 left_instruction_input: fr(4),
                 right_instruction_input: fr(5),
             },
-            ram_raf_evaluation: RamRafEvaluationOutputClaims { ram_ra: fr(14) },
-            ram_output_check: RamOutputCheckOutputClaims { val_final: fr(15) },
+            ram_raf_evaluation: RamRafEvaluationOutputClaims { ram_ra: fr(10) },
+            ram_output_check: RamOutputCheckOutputClaims { val_final: fr(11) },
         }
     }
 
@@ -309,17 +304,16 @@ mod tests {
 
         assert_eq!(
             sumchecks().opening_values(&claims),
-            (1..=15).map(fr).collect::<Vec<_>>()
+            (1..=11).map(fr).collect::<Vec<_>>()
         );
     }
 
-    /// The generated `output_claim_count` sums the members' wire sets: 16
-    /// expression-referenced openings, minus the reduction's 3 aliases, plus the
-    /// product remainder's 2 staged openings.
+    /// The generated `output_claim_count` sums the members' wire sets: 14
+    /// expression-referenced openings minus the reduction's 3 aliases.
     #[test]
     fn output_claim_count_matches_absorbed_openings() {
         let sumchecks = sumchecks();
-        assert_eq!(sumchecks.output_claim_count(), 15);
+        assert_eq!(sumchecks.output_claim_count(), 11);
         assert_eq!(
             sumchecks.opening_values(&consistent_values()).len(),
             sumchecks.output_claim_count(),

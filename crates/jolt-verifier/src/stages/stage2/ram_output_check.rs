@@ -17,8 +17,8 @@ use jolt_claims::protocols::jolt::{
 use jolt_claims::SymbolicSumcheck;
 use jolt_field::JoltField;
 use jolt_poly::{range_mask_mle_msb, sparse_segments_mle_msb, try_eq_mle};
-use jolt_program::preprocess::PublicIoMemory;
 use jolt_transcript::Transcript;
+use jolt_wasm_program::PublicIoMemory;
 
 use crate::stages::relations::ConcreteSumcheck;
 use crate::VerifierError;
@@ -173,8 +173,8 @@ impl<F: JoltField> ConcreteSumcheck<F> for RamOutputCheck<F> {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use common::jolt_device::{JoltDevice, MemoryConfig};
     use jolt_field::Fr;
+    use jolt_wasm_program::PublicIo;
 
     /// The `instance_point_offset` override must place the relation's own
     /// rounds exactly at the batch tail, and reject batch vectors shorter
@@ -183,11 +183,11 @@ mod tests {
     fn instance_point_offset_spans_the_batch_tail() {
         for (log_t, log_k, phase1, phase2) in [(4usize, 3usize, 2usize, 1usize), (6, 5, 3, 2)] {
             let dimensions = ReadWriteDimensions::new(log_t, log_k, phase1, phase2);
-            let public_memory = PublicIoMemory::new(&JoltDevice::new(&MemoryConfig {
-                program_size: Some(1024),
-                ..Default::default()
-            }))
-            .unwrap();
+            let public_memory = PublicIoMemory::new(&PublicIo {
+                entry: "main".to_owned(),
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+            });
             let relation = RamOutputCheck::<Fr>::new(dimensions, public_memory);
             // The real batch has `log_t + log_k` variables (the RAM read-write
             // leader); also probe a padded vector.

@@ -29,7 +29,7 @@ where
 {
     let uniskip_params = uniskip::UniskipParams::spartan_outer();
     let log_t = crate::num::ilog2(checked.trace_length);
-    let dimensions = SpartanOuterDimensions::rv64(log_t);
+    let dimensions = SpartanOuterDimensions::wasm(log_t);
     let tau = uniskip::draw_spartan_outer_tau(transcript, log_t);
 
     if !checked.zk {

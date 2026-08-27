@@ -41,8 +41,11 @@ pub enum VerifierError {
     #[error("vector commitment setup capacity {got} is too small; expected at least {required}")]
     InvalidVectorCommitmentCapacity { required: usize, got: usize },
 
-    #[error("program I/O memory layout does not match verifier preprocessing")]
-    MemoryLayoutMismatch,
+    #[error("export {name:?} is not an entry of the preprocessed program")]
+    UnknownEntry { name: String },
+
+    #[error("advice commitments are not supported by the WASM memory layout")]
+    UnsupportedAdvice,
 
     #[error("public input length {got} exceeds configured maximum {max}")]
     InputTooLarge { got: usize, max: usize },
@@ -56,8 +59,8 @@ pub enum VerifierError {
     #[error("invalid RAM domain size {got}; expected a power of two in [{min}, {max}]")]
     InvalidRamK { got: usize, min: usize, max: usize },
 
-    #[error("invalid verifier memory layout: {reason}")]
-    InvalidMemoryLayout { reason: String },
+    #[error("invalid RAM domain: {reason}")]
+    InvalidRamDomain { reason: String },
 
     #[error("invalid precommitted claim-reduction schedule: {reason}")]
     InvalidPrecommittedSchedule { reason: String },

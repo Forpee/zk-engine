@@ -1,5 +1,5 @@
 use jolt_field::Ring;
-use jolt_riscv::{CircuitFlags, InstructionFlags};
+use jolt_wasm_ir::RowFlag;
 
 use crate::derived;
 
@@ -12,43 +12,41 @@ pub(crate) const OUTER_REMAINDER_DEGREE: usize = 3;
 pub(crate) const PRODUCT_REMAINDER_DEGREE: usize = 3;
 pub(crate) const SHIFT_DEGREE: usize = 2;
 
-pub const SPARTAN_OUTER_R1CS_INPUTS: [JoltVirtualPolynomial; 35] = [
-    JoltVirtualPolynomial::LeftInstructionInput,
-    JoltVirtualPolynomial::RightInstructionInput,
-    JoltVirtualPolynomial::Product,
-    JoltVirtualPolynomial::ShouldBranch,
-    JoltVirtualPolynomial::PC,
-    JoltVirtualPolynomial::UnexpandedPC,
-    JoltVirtualPolynomial::Imm,
-    JoltVirtualPolynomial::RamAddress,
-    JoltVirtualPolynomial::Rs1Value,
-    JoltVirtualPolynomial::Rs2Value,
-    JoltVirtualPolynomial::RdWriteValue,
-    JoltVirtualPolynomial::RamReadValue,
-    JoltVirtualPolynomial::RamWriteValue,
-    JoltVirtualPolynomial::LeftLookupOperand,
-    JoltVirtualPolynomial::RightLookupOperand,
-    JoltVirtualPolynomial::NextUnexpandedPC,
-    JoltVirtualPolynomial::NextPC,
-    JoltVirtualPolynomial::NextIsVirtual,
-    JoltVirtualPolynomial::NextIsFirstInSequence,
-    JoltVirtualPolynomial::LookupOutput,
-    JoltVirtualPolynomial::ShouldJump,
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::AddOperands),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::SubtractOperands),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::MultiplyOperands),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::Load),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::Store),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::Jump),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::WriteLookupOutputToRD),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::VirtualInstruction),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::Assert),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::DoNotUpdateUnexpandedPC),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::Advice),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::IsCompressed),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::IsFirstInSequence),
-    JoltVirtualPolynomial::OpFlags(CircuitFlags::IsLastInSequence),
-];
+/// The Spartan outer R1CS inputs, in `jolt_r1cs::constraints::wasm` variable
+/// order: the sixteen value/lookup/pc columns, then every [`RowFlag`] in bit
+/// order.
+pub const SPARTAN_OUTER_R1CS_INPUTS: [JoltVirtualPolynomial; 16 + RowFlag::COUNT] = {
+    let mut inputs = [JoltVirtualPolynomial::PC; 16 + RowFlag::COUNT];
+    let values = [
+        JoltVirtualPolynomial::LeftInstructionInput,
+        JoltVirtualPolynomial::RightInstructionInput,
+        JoltVirtualPolynomial::Product,
+        JoltVirtualPolynomial::PC,
+        JoltVirtualPolynomial::Imm,
+        JoltVirtualPolynomial::RamAddress,
+        JoltVirtualPolynomial::Rs1Value,
+        JoltVirtualPolynomial::Rs2Value,
+        JoltVirtualPolynomial::RdWriteValue,
+        JoltVirtualPolynomial::RamReadValue,
+        JoltVirtualPolynomial::RamWriteValue,
+        JoltVirtualPolynomial::LeftLookupOperand,
+        JoltVirtualPolynomial::RightLookupOperand,
+        JoltVirtualPolynomial::NextPC,
+        JoltVirtualPolynomial::LookupOutput,
+        JoltVirtualPolynomial::ShouldBranch,
+    ];
+    let mut i = 0;
+    while i < 16 {
+        inputs[i] = values[i];
+        i += 1;
+    }
+    let mut f = 0;
+    while f < RowFlag::COUNT {
+        inputs[16 + f] = JoltVirtualPolynomial::RowFlag(RowFlag::ALL[f]);
+        f += 1;
+    }
+    inputs
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpartanOuterDimensions {
@@ -92,7 +90,7 @@ impl SpartanOuterDimensions {
         1 + self.log_t
     }
 
-    pub fn rv64(log_t: usize) -> Self {
+    pub fn wasm(log_t: usize) -> Self {
         Self {
             log_t,
             variables: SPARTAN_OUTER_R1CS_INPUTS.to_vec(),
@@ -166,10 +164,6 @@ pub fn product_should_branch_outer_opening() -> JoltOpeningId {
     outer_opening(JoltVirtualPolynomial::ShouldBranch)
 }
 
-pub fn product_should_jump_outer_opening() -> JoltOpeningId {
-    outer_opening(JoltVirtualPolynomial::ShouldJump)
-}
-
 pub fn left_instruction_input_product() -> JoltOpeningId {
     JoltOpeningId::virtual_polynomial(
         JoltVirtualPolynomial::LeftInstructionInput,
@@ -191,87 +185,17 @@ pub fn lookup_output_product() -> JoltOpeningId {
     )
 }
 
-pub fn jump_flag_product() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::OpFlags(CircuitFlags::Jump),
-        JoltRelationId::SpartanProductVirtualization,
-    )
-}
-
-pub fn write_lookup_output_to_rd_product() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::OpFlags(CircuitFlags::WriteLookupOutputToRD),
-        JoltRelationId::SpartanProductVirtualization,
-    )
-}
-
 pub fn branch_flag_product() -> JoltOpeningId {
     JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::InstructionFlags(InstructionFlags::Branch),
+        JoltVirtualPolynomial::RowFlag(RowFlag::Branch),
         JoltRelationId::SpartanProductVirtualization,
     )
 }
-
-pub fn next_is_noop_product() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::NextIsNoop,
-        JoltRelationId::SpartanProductVirtualization,
-    )
-}
-
-pub fn virtual_instruction_product() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::OpFlags(CircuitFlags::VirtualInstruction),
-        JoltRelationId::SpartanProductVirtualization,
-    )
-}
-
-pub(crate) fn next_unexpanded_pc_outer() -> JoltOpeningId {
-    outer_opening(JoltVirtualPolynomial::NextUnexpandedPC)
-}
-
 pub(crate) fn next_pc_outer() -> JoltOpeningId {
     outer_opening(JoltVirtualPolynomial::NextPC)
 }
-
-pub(crate) fn next_is_virtual_outer() -> JoltOpeningId {
-    outer_opening(JoltVirtualPolynomial::NextIsVirtual)
-}
-
-pub(crate) fn next_is_first_in_sequence_outer() -> JoltOpeningId {
-    outer_opening(JoltVirtualPolynomial::NextIsFirstInSequence)
-}
-
-pub fn unexpanded_pc_shift() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::UnexpandedPC,
-        JoltRelationId::SpartanShift,
-    )
-}
-
 pub fn pc_shift() -> JoltOpeningId {
     JoltOpeningId::virtual_polynomial(JoltVirtualPolynomial::PC, JoltRelationId::SpartanShift)
-}
-
-pub fn is_virtual_shift() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::OpFlags(CircuitFlags::VirtualInstruction),
-        JoltRelationId::SpartanShift,
-    )
-}
-
-pub fn is_first_in_sequence_shift() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::OpFlags(CircuitFlags::IsFirstInSequence),
-        JoltRelationId::SpartanShift,
-    )
-}
-
-pub fn is_noop_shift() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::InstructionFlags(InstructionFlags::IsNoop),
-        JoltRelationId::SpartanShift,
-    )
 }
 
 #[cfg(test)]
@@ -285,7 +209,7 @@ mod tests {
 
     #[test]
     fn default_outer_dimensions_match_r1cs_input_catalog() {
-        let dimensions = SpartanOuterDimensions::rv64(8);
+        let dimensions = SpartanOuterDimensions::wasm(8);
 
         assert_eq!(dimensions.log_t(), 8);
         assert_eq!(dimensions.variables(), &SPARTAN_OUTER_R1CS_INPUTS);

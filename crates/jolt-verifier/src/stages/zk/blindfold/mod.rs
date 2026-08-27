@@ -73,10 +73,9 @@ use jolt_claims::{
             dimensions::{JoltFormulaDimensions, REGISTER_ADDRESS_BITS},
             instruction, ram,
             spartan::{
-                branch_flag_product, jump_flag_product, left_instruction_input_product,
-                lookup_output_product, next_is_noop_product, outer_opening, outer_uniskip_opening,
-                product_outer_opening, product_should_branch_outer_opening,
-                product_should_jump_outer_opening, product_uniskip_opening,
+                branch_flag_product, left_instruction_input_product, lookup_output_product,
+                outer_opening, outer_uniskip_opening, product_outer_opening,
+                product_should_branch_outer_opening, product_uniskip_opening,
                 right_instruction_input_product, SpartanOuterDimensions, SpartanProductDimensions,
             },
         },
@@ -102,15 +101,12 @@ use jolt_claims::{
 };
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
-use jolt_lookup_tables::{LookupTableKind, XLEN as RISCV_XLEN};
 use jolt_openings::CommitmentScheme;
 use jolt_poly::{
-    block_selector_mle_msb,
     lagrange::{centered_lagrange_evals, centered_lagrange_kernel},
     try_eq_mle, EqPlusOnePolynomial, IdentityPolynomial, LtPolynomial, MultilinearEvaluation,
     OperandPolynomial, OperandSide,
 };
-use jolt_program::preprocess::PublicIoMemory;
 use jolt_r1cs::constraints::jolt::{
     JoltSpartanOuterPublic, JoltSpartanOuterRemainder, JoltSpartanOuterRemainderChallenges,
     SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE, SPARTAN_OUTER_UNISKIP_FIRST_ROUND_DEGREE,
@@ -120,6 +116,9 @@ use jolt_sumcheck::{
     BatchedCommittedSumcheckConsistency, CommittedSumcheckConsistency, SumcheckDomainSpec,
     SumcheckStatement,
 };
+use jolt_wasm_ir::layout::RAM_BASE;
+use jolt_wasm_program::PublicIoMemory;
+use jolt_wasm_tables::{WasmTable, XLEN};
 use num_traits::Zero;
 
 use super::{inputs::BlindFoldInputs, outputs::CommittedOutputClaimOutput};
@@ -428,12 +427,7 @@ where
     PCS: CommitmentScheme,
     VC: VectorCommitment<Field = PCS::Field>,
 {
-    let public_memory = PublicIoMemory::new(&input.checked.public_io).map_err(|error| {
-        VerifierError::StageClaimPublicInputFailed {
-            stage: JoltRelationId::RamOutputCheck,
-            reason: error.to_string(),
-        }
-    })?;
+    let public_memory = PublicIoMemory::new(&input.checked.public_io);
     ram_output_check_publics(
         &public_memory,
         output_address_challenges,
@@ -494,57 +488,20 @@ where
 }
 
 fn advice_selector<PCS, VC, ZkProof>(
-    input: &BlindFoldInputs<'_, PCS, VC, ZkProof>,
+    _input: &BlindFoldInputs<'_, PCS, VC, ZkProof>,
     kind: JoltAdviceKind,
-    r_address: &[PCS::Field],
+    _r_address: &[PCS::Field],
 ) -> Result<(PCS::Field, Vec<PCS::Field>), VerifierError>
 where
     PCS: CommitmentScheme,
     VC: VectorCommitment<Field = PCS::Field>,
 {
-    let layout = &input.checked.public_io.memory_layout;
-    let (start_address, max_size) = match kind {
-        JoltAdviceKind::Trusted => (layout.trusted_advice_start, layout.max_trusted_advice_size),
-        JoltAdviceKind::Untrusted => (
-            layout.untrusted_advice_start,
-            layout.max_untrusted_advice_size,
-        ),
-    };
-    let start_index = u128::from(
-        layout
-            .remapped_word_address(start_address)
-            .map_err(|error| public_error(JoltRelationId::RamValCheck, error))?,
-    );
-    let max_size =
-        usize::try_from(max_size).map_err(|_| VerifierError::StageClaimPublicInputFailed {
-            stage: JoltRelationId::RamValCheck,
-            reason: format!("{kind:?} advice size {max_size} exceeds usize"),
-        })?;
-    // Floor division mirrors the shared advice geometry in jolt-claims
-    // (`geometry/dimensions.rs`): the advice block holds `max_size / 8` words.
-    #[expect(
-        clippy::integer_division,
-        reason = "floor division bytes -> words matches the prover-shared advice geometry"
-    )]
-    let advice_num_vars = crate::num::ilog2((max_size / 8).next_power_of_two());
-    let selector = block_selector_mle_msb(start_index, advice_num_vars, r_address)
-        .map_err(|error| public_error(JoltRelationId::RamValCheck, error))?;
-    let opening_point = r_address
-        .get(r_address.len().checked_sub(advice_num_vars).ok_or_else(|| {
-            VerifierError::StageClaimPublicInputFailed {
-                stage: JoltRelationId::RamValCheck,
-                reason: format!(
-                    "{kind:?} advice point needs {advice_num_vars} variables but RAM address has {}",
-                    r_address.len()
-                ),
-            }
-        })?..)
-        .ok_or_else(|| VerifierError::StageClaimPublicInputFailed {
-            stage: JoltRelationId::RamValCheck,
-            reason: "advice opening point is out of range".to_string(),
-        })?
-        .to_vec();
-    Ok((selector, opening_point))
+    // The WASM layout has no advice regions; `validate_inputs` rejects advice
+    // commitments, so this is only reachable through an inconsistent proof.
+    Err(VerifierError::StageClaimPublicInputFailed {
+        stage: JoltRelationId::RamValCheck,
+        reason: format!("{kind:?} advice is not part of the WASM memory layout"),
+    })
 }
 
 fn advice_source_point<PCS, VC, ZkProof>(
@@ -683,14 +640,7 @@ where
         REGISTER_ADDRESS_BITS,
         JoltRelationId::BytecodeReadRaf,
     )?;
-    let entry_bytecode_index = input
-        .preprocessing
-        .program
-        .entry_bytecode_index()
-        .ok_or_else(|| VerifierError::StageClaimPublicInputFailed {
-            stage: JoltRelationId::BytecodeReadRaf,
-            reason: "entry address was not found in bytecode preprocessing".to_string(),
-        })?;
+    let entry_bytecode_index = input.checked.entry_pc;
     let (spartan_outer_raf, spartan_shift_raf, entry) =
         if input.checked.precommitted.bytecode.is_some() {
             let v = bytecode::read_raf_committed_public_values::<PCS::Field>(
@@ -724,7 +674,7 @@ where
             let stage_gamma_powers = bytecode_challenges.stage_gamma_powers();
             let v =
                 bytecode::read_raf_public_values::<PCS::Field>(BytecodeReadRafEvaluationInputs {
-                    bytecode: &full_program.bytecode.bytecode,
+                    bytecode: full_program.bytecode.rows(),
                     r_address: &bytecode_r_address,
                     r_cycle: &bytecode_r_cycle,
                     stage_cycle_points: [

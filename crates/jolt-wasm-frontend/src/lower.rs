@@ -36,7 +36,8 @@
 //!   memory keeps it in bounds).
 
 use jolt_wasm_ir::layout::{
-    DEFAULT_MAX_PAGES, GLOBALS_BASE, LINEAR_MEMORY_BASE, MAX_PAGES, MEMORY_SIZE_ADDR,
+    input_address, output_address, DEFAULT_MAX_PAGES, GLOBALS_BASE, LINEAR_MEMORY_BASE, MAX_PAGES,
+    MEMORY_SIZE_ADDR, PAGE_SIZE, SHADOW_STACK_BASE, TERMINATION_ADDR,
 };
 use jolt_wasm_ir::{
     shift_right_bitmask, AdviceHint, AluOp, AssertFailure, DataSegment, Ir, IrFunction, IrProgram,
@@ -109,6 +110,7 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
         code: vec![Ir::Halt],
         call_fixups: Vec::new(),
         signatures: &signatures,
+        max_memory_bytes: memory.max_pages * PAGE_SIZE,
     };
     let mut functions = Vec::with_capacity(module.functions.len());
     for (index, function) in module.functions.iter().enumerate() {
@@ -123,6 +125,12 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
             frame_slots: sig.frame_slots,
         });
     }
+    let mut entries = std::collections::BTreeMap::new();
+    for (name, function) in &module.exports {
+        let pc = emitter.pc()?;
+        emitter.emit_entry_stub(*function, module.start)?;
+        let _ = entries.insert(name.clone(), pc);
+    }
     for (pc, callee) in emitter.call_fixups {
         let entry = functions
             .get(callee as usize)
@@ -135,6 +143,7 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
         code: emitter.code,
         functions,
         exports: module.exports.clone(),
+        entries,
         memory,
         globals: module.globals.iter().map(|g| g.init).collect(),
         data: module
@@ -145,7 +154,6 @@ pub fn lower(module: &WasmModule) -> Result<IrProgram, LowerError> {
                 bytes: d.bytes.clone(),
             })
             .collect(),
-        start: module.start,
     })
 }
 
@@ -195,6 +203,8 @@ struct Emitter<'a> {
     code: Vec<Ir>,
     call_fixups: Vec<(Pc, u32)>,
     signatures: &'a [Signature],
+    /// The page cap in bytes: `memory.grow` past it fails.
+    max_memory_bytes: u64,
 }
 
 /// Per-function lowering state.
@@ -427,6 +437,73 @@ impl Emitter<'_> {
             })?;
             let _ = self.emit(Ir::mov(rd, rs))?;
         }
+        Ok(())
+    }
+
+    /// The entry stub of exported `function`: from an all-zero register file,
+    /// set `SP`, run `start`, load the parameters from the public input words,
+    /// call, store the results to the public output words, set the
+    /// termination word, and halt.
+    fn emit_entry_stub(&mut self, function: u32, start: Option<u32>) -> Result<(), LowerError> {
+        let sig = *self
+            .signatures
+            .get(function as usize)
+            .ok_or(LowerError::FunctionIndex(function))?;
+        // The stub is a frame with no locals; its operand stack holds the
+        // arguments, then the results.
+        let ctx = FunctionCtx {
+            index: function,
+            sig: Signature {
+                params: 0,
+                results: 0,
+                locals: 0,
+                frame_slots: sig.params.max(sig.results) as usize,
+            },
+            labels: Vec::new(),
+        };
+        let _ = self.emit(Ir::const_(Reg::SP, SHADOW_STACK_BASE + 8))?;
+        if let Some(start) = start {
+            self.emit_call(&ctx, 0, start)?;
+        }
+        for i in 0..sig.params {
+            let rd = ctx.slot(i)?;
+            let _ = self.emit(load(rd, Reg::ZERO, input_address(u64::from(i)) as i64))?;
+        }
+        self.emit_call(&ctx, sig.params, function)?;
+        for k in 0..sig.results {
+            let value = ctx.slot(k)?;
+            let _ = self.emit(store(Reg::ZERO, value, output_address(u64::from(k)) as i64))?;
+        }
+        self.emit_all([
+            Ir::const_(Reg::T0, 1),
+            store(Reg::ZERO, Reg::T0, TERMINATION_ADDR as i64),
+            Ir::Jump {
+                target: IrProgram::HALT_PC,
+            },
+        ])
+    }
+
+    /// `memory.grow` by `rs` pages into `rd`: the old size in pages, or
+    /// `u32::MAX` when the new size would exceed the page cap (in which case
+    /// the size word is unchanged).
+    fn emit_memory_grow(&mut self, rd: Reg, rs: Reg) -> Result<(), LowerError> {
+        self.emit_all([
+            load(Reg::T0, Reg::ZERO, MEMORY_SIZE_ADDR as i64),
+            mul64(Reg::T1, rs, imm(PAGE_SIZE)),
+            add64(Reg::T1, Reg::T0, reg(Reg::T1)),
+            Ir::alu_imm(AluOp::LeU, Reg::T2, Reg::T1, self.max_memory_bytes),
+        ])?;
+        let fail = self.emit(Ir::branch_if_zero(Reg::T2, 0))?;
+        self.emit_all([
+            store(Reg::ZERO, Reg::T1, MEMORY_SIZE_ADDR as i64),
+            Ir::alu_imm(AluOp::Srl, rd, Reg::T0, shift_right_bitmask(16)),
+        ])?;
+        let done = self.emit(Ir::Jump { target: 0 })?;
+        let fail_pc = self.pc()?;
+        self.patch(fail, fail_pc);
+        let _ = self.emit(Ir::const_(rd, u64::from(u32::MAX)))?;
+        let end = self.pc()?;
+        self.patch(done, end);
         Ok(())
     }
 
@@ -846,7 +923,7 @@ impl Emitter<'_> {
             }
             WasmOp::MemoryGrow => {
                 let rd = ctx.stack(h - 1)?;
-                let _ = self.emit(Ir::MemoryGrow { rd, rs: rd })?;
+                self.emit_memory_grow(rd, rd)?;
             }
             WasmOp::Unary(width, op) => {
                 let rd = ctx.stack(h - 1)?;

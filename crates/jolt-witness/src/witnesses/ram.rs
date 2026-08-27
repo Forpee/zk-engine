@@ -1,8 +1,8 @@
 use jolt_field::JoltField;
-use jolt_riscv::JoltTraceRow as TraceRow;
+use jolt_wasm_ir::layout::remap_word_address;
 
 use super::{Extract, ToField, WitnessEnv};
-use crate::WitnessError;
+use crate::{TraceRow, WitnessError};
 
 pub(crate) fn ram_access_address(row: &TraceRow) -> Option<u64> {
     (row.is_load() || row.is_store()).then(|| row.ram_address())
@@ -22,7 +22,8 @@ pub struct RamReadValue(pub u64);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RamWriteValue(pub u64);
 
-/// Whether the cycle accesses a nonzero RAM address.
+/// Whether the cycle accesses a nonzero RAM address (every WebAssembly RAM
+/// address is nonzero, so this is "the cycle accesses RAM").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RamHammingWeight(pub bool);
 
@@ -102,17 +103,8 @@ impl Extract for RemappedRamAddress {
     fn extract(
         row: &TraceRow,
         _next: Option<&TraceRow>,
-        env: &WitnessEnv<'_>,
+        _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        Ok(Self(
-            ram_access_address(row)
-                .and_then(|address| {
-                    env.preprocessing
-                        .memory_layout
-                        .remap_word_address(address)
-                        .ok()
-                })
-                .flatten(),
-        ))
+        Ok(Self(ram_access_address(row).and_then(remap_word_address)))
     }
 }

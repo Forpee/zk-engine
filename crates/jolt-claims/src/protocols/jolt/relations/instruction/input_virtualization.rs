@@ -1,11 +1,11 @@
 //! Instruction input-virtualization symbolic sumcheck relation.
 
-use jolt_riscv::InstructionFlags;
+use jolt_wasm_ir::RowFlag;
 use serde::{Deserialize, Serialize};
 
 use crate::protocols::jolt::geometry::instruction::{
-    imm, left_operand_is_pc, left_operand_is_rs1, right_operand_is_imm, right_operand_is_rs2,
-    rs1_value, rs2_value, unexpanded_pc, INPUT_VIRTUALIZATION_DEGREE,
+    imm, left_operand_is_rs1, right_operand_is_imm, right_operand_is_rs2, rs1_value, rs2_value,
+    INPUT_VIRTUALIZATION_DEGREE,
 };
 use crate::protocols::jolt::geometry::spartan::{
     left_instruction_input_product, right_instruction_input_product,
@@ -28,19 +28,15 @@ use jolt_field::Ring;
 ))]
 #[relation(InstructionInputVirtualization)]
 pub struct InstructionInputOutputClaims<C> {
-    #[opening(InstructionFlags(InstructionFlags::LeftOperandIsRs1Value))]
+    #[opening(RowFlag(RowFlag::LeftIsRs1))]
     pub left_operand_is_rs1: C,
     #[opening(Rs1Value)]
     pub rs1_value: C,
-    #[opening(InstructionFlags(InstructionFlags::LeftOperandIsPC))]
-    pub left_operand_is_pc: C,
-    #[opening(UnexpandedPC)]
-    pub unexpanded_pc: C,
-    #[opening(InstructionFlags(InstructionFlags::RightOperandIsRs2Value))]
+    #[opening(RowFlag(RowFlag::RightIsRs2))]
     pub right_operand_is_rs2: C,
     #[opening(Rs2Value)]
     pub rs2_value: C,
-    #[opening(InstructionFlags(InstructionFlags::RightOperandIsImm))]
+    #[opening(RowFlag(RowFlag::RightIsImm))]
     pub right_operand_is_imm: C,
     #[opening(Imm)]
     pub imm: C,
@@ -116,10 +112,6 @@ impl SymbolicSumcheck for InputVirtualization {
                 * challenge(InstructionInputChallenge::Gamma)
                 * opening(left_operand_is_rs1())
                 * opening(rs1_value())
-            + derived(InstructionInputPublic::EqProduct)
-                * challenge(InstructionInputChallenge::Gamma)
-                * opening(left_operand_is_pc())
-                * opening(unexpanded_pc())
     }
 }
 
@@ -145,8 +137,6 @@ mod tests {
         let imm_value = Fr::from_u64(17);
         let left_is_rs1 = Fr::from_u64(19);
         let rs1 = Fr::from_u64(23);
-        let left_is_pc = Fr::from_u64(29);
-        let pc = Fr::from_u64(31);
         let gamma = Fr::from_u64(37);
         let eq_product = Fr::from_u64(41);
         let zero = Fr::from_u64(0);
@@ -172,8 +162,6 @@ mod tests {
                 id if id == imm() => imm_value,
                 id if id == left_operand_is_rs1() => left_is_rs1,
                 id if id == rs1_value() => rs1,
-                id if id == left_operand_is_pc() => left_is_pc,
-                id if id == unexpanded_pc() => pc,
                 _ => zero,
             },
             |id| match *id {
@@ -190,10 +178,7 @@ mod tests {
         assert_eq!(
             output,
             eq_product
-                * (right_is_rs2 * rs2
-                    + right_is_imm * imm_value
-                    + gamma * left_is_rs1 * rs1
-                    + gamma * left_is_pc * pc)
+                * (right_is_rs2 * rs2 + right_is_imm * imm_value + gamma * left_is_rs1 * rs1)
         );
     }
 

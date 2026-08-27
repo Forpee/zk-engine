@@ -50,15 +50,14 @@ where
         .collect::<Vec<_>>();
     let eq_reduction = try_eq_mle(&stage2_instruction_opening, &instruction_opening.r_cycle)
         .map_err(|error| public_error(JoltRelationId::InstructionReadRaf, error))?;
-    let left_operand_eval = OperandPolynomial::new(2 * RISCV_XLEN, OperandSide::Left)
+    let left_operand_eval = OperandPolynomial::new(2 * XLEN, OperandSide::Left)
         .evaluate(&instruction_opening.r_address);
-    let right_operand_eval = OperandPolynomial::new(2 * RISCV_XLEN, OperandSide::Right)
+    let right_operand_eval = OperandPolynomial::new(2 * XLEN, OperandSide::Right)
         .evaluate(&instruction_opening.r_address);
-    let identity_eval =
-        IdentityPolynomial::new(2 * RISCV_XLEN).evaluate(&instruction_opening.r_address);
+    let identity_eval = IdentityPolynomial::new(2 * XLEN).evaluate(&instruction_opening.r_address);
     let instruction_gamma_squared = input.stage5.challenges.instruction_read_raf.gamma
         * input.stage5.challenges.instruction_read_raf.gamma;
-    for table in LookupTableKind::<RISCV_XLEN>::iter() {
+    for table in WasmTable::iter() {
         values.public(
             JoltDerivedId::from(InstructionReadRafPublic::EqTableValue(table.index())),
             eq_reduction

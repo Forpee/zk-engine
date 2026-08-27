@@ -1,114 +1,94 @@
 //! Sample-trace fixtures for the derive-generated bundle consistency tests.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use jolt_claims::protocols::jolt::{JoltOneHotConfig, JoltPolynomialId};
 use jolt_field::Fr;
-use jolt_program::{
-    execution::{
-        JoltProgram, OwnedTrace, RamAccess, RamWrite, RegisterRead, RegisterState, RegisterWrite,
-        TraceOutput, TraceRow,
-    },
-    preprocess::{BytecodePreprocessing, JoltProgramPreprocessing, RAMPreprocessing},
-};
-use jolt_riscv::{JoltInstructionKind, JoltInstructionRow, NormalizedOperands, RV64IMAC_JOLT};
-use std::sync::Arc;
+use jolt_wasm_backend::Machine;
+use jolt_wasm_ir::layout::LINEAR_MEMORY_BASE;
+use jolt_wasm_ir::{AluOp, Ir, IrFunction, IrProgram, MemoryLimits, Operand, Reg, Width};
+use jolt_wasm_program::{build_trace_rows, PublicIo, WasmProgramPreprocessing};
 
 use crate::backend::trace::{JoltVmWitnessConfig, JoltVmWitnessInputs, TraceBackend};
 use crate::{BundleSource, JoltWitnessOracle, WitnessBundle};
 
-/// Runs `f` against a small canned backend: an ADDI and a store, padded to `2^2`.
+/// The padded cycle domain of the sample trace.
+pub const SAMPLE_CYCLES: usize = 8;
+
+/// A hand-built program: `T0 = 5`, `T1 = T0 + 3`, `mem[LINEAR + 8] = T1`,
+/// jump to the halt trampoline. No entry stub, no arguments.
 #[expect(clippy::unwrap_used, reason = "test fixture construction")]
-pub fn with_sample_backend<R>(f: impl FnOnce(&TraceBackend<OwnedTrace>) -> R) -> R {
-    let instruction = JoltInstructionRow {
-        instruction_kind: JoltInstructionKind::ADDI,
-        address: 0x8000_0000,
-        operands: NormalizedOperands {
-            rd: Some(1),
-            rs1: Some(2),
-            rs2: None,
-            imm: 3,
+pub fn sample_program() -> IrProgram {
+    let code = vec![
+        Ir::Halt,
+        Ir::const_(Reg::T0, 5),
+        Ir::alu(AluOp::Add(Width::W64), Reg::T1, Reg::T0, Operand::Imm(3)),
+        Ir::Store {
+            base: Reg::ZERO,
+            value: Reg::T1,
+            offset: (LINEAR_MEMORY_BASE + 8) as i64,
         },
-        virtual_sequence_remaining: None,
-        is_first_in_sequence: false,
-        is_compressed: false,
-    };
-    let store = JoltInstructionRow {
-        instruction_kind: JoltInstructionKind::SD,
-        address: instruction.address + 4,
-        operands: NormalizedOperands {
-            rd: None,
-            rs1: Some(2),
-            rs2: Some(3),
-            imm: 0,
-        },
-        ..Default::default()
-    };
-    let preprocessing = Arc::new(JoltProgramPreprocessing {
-        bytecode: BytecodePreprocessing::preprocess(
-            vec![instruction, store],
-            instruction.address as u64,
-            RV64IMAC_JOLT,
-        )
-        .unwrap(),
-        ram: RAMPreprocessing::default(),
-        memory_layout: Default::default(),
-        max_padded_trace_length: 4,
-    });
-    let program = Arc::new(JoltProgram::default());
-    let rows = vec![
-        TraceRow {
-            instruction,
-            registers: RegisterState {
-                rs1: Some(RegisterRead {
-                    register: 2,
-                    value: 5,
-                }),
-                rd: Some(RegisterWrite {
-                    register: 1,
-                    pre_value: 0,
-                    post_value: 8,
-                }),
-                ..Default::default()
-            },
-            ram_access: RamAccess::NoOp,
-            #[cfg(feature = "field-inline")]
-            field_inline: None,
-        },
-        TraceRow {
-            instruction: store,
-            registers: RegisterState {
-                rs1: Some(RegisterRead {
-                    register: 2,
-                    value: 0x8000_1008,
-                }),
-                rs2: Some(RegisterRead {
-                    register: 3,
-                    value: 11,
-                }),
-                ..Default::default()
-            },
-            ram_access: RamAccess::Write(RamWrite {
-                address: 0x8000_1008,
-                pre_value: 7,
-                post_value: 11,
-            }),
-            #[cfg(feature = "field-inline")]
-            field_inline: None,
-        },
+        Ir::Jump { target: 0 },
     ];
+    let mut exports = BTreeMap::new();
+    let _ = exports.insert("main".to_owned(), 0);
+    let mut entries = BTreeMap::new();
+    let _ = entries.insert("main".to_owned(), 1);
+    IrProgram {
+        code,
+        functions: vec![IrFunction {
+            entry: 1,
+            params: 0,
+            results: 0,
+            frame_slots: 0,
+        }],
+        exports,
+        entries,
+        memory: MemoryLimits {
+            initial_pages: 1,
+            max_pages: 1,
+        },
+        globals: Vec::new(),
+        data: Vec::new(),
+    }
+    .validate()
+    .unwrap()
+}
+
+trait Validate: Sized {
+    fn validate(self) -> Result<Self, jolt_wasm_ir::PreprocessingError>;
+}
+
+impl Validate for IrProgram {
+    fn validate(self) -> Result<Self, jolt_wasm_ir::PreprocessingError> {
+        let _ = jolt_wasm_ir::WasmBytecode::preprocess(&self)?;
+        Ok(self)
+    }
+}
+
+/// Runs `f` against a small canned backend: the sample program's four rows,
+/// padded to [`SAMPLE_CYCLES`].
+#[expect(clippy::unwrap_used, reason = "test fixture construction")]
+pub fn with_sample_backend<R>(f: impl FnOnce(&TraceBackend) -> R) -> R {
+    let program = sample_program();
+    let preprocessing = Arc::new(WasmProgramPreprocessing::new(&program, SAMPLE_CYCLES).unwrap());
+    let execution = Machine::new(&program).unwrap().invoke("main", &[]).unwrap();
+    let rows = Arc::new(build_trace_rows(&execution.records).unwrap());
+    let io = PublicIo {
+        entry: "main".to_owned(),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+    };
     let config = JoltVmWitnessConfig::new(
-        2,
-        64,
+        SAMPLE_CYCLES.ilog2() as usize,
+        1 << 20,
         JoltOneHotConfig {
             log_k_chunk: 4,
             lookups_ra_virtual_log_k_chunk: 16,
         },
     );
-    let inputs = JoltVmWitnessInputs::new(
-        &program,
-        &preprocessing,
-        TraceOutput::new(OwnedTrace::new(rows), Default::default(), None, None),
-    );
-    let backend = TraceBackend::new(config, inputs);
+    let backend = TraceBackend::new(config, JoltVmWitnessInputs::new(&preprocessing, rows, io));
     f(&backend)
 }
 
@@ -122,16 +102,12 @@ where
     B: WitnessBundle + Clone + Send + Sync,
 {
     with_sample_backend(|backend| {
-        assert!(
-            B::annotated_ids().contains(&id),
-            "{id:?} is not in the bundle's annotated id set"
-        );
-        let rows: Vec<B> = backend.bundles().unwrap();
-        let column: Vec<Fr> = rows.iter().map(value).collect();
-        let table = JoltWitnessOracle::<Fr>::oracle_table(backend, id).unwrap();
+        let bundles: Vec<B> = backend.bundles().unwrap();
+        let typed: Vec<Fr> = bundles.iter().map(&value).collect();
+        let table: Vec<Fr> = backend.oracle_table(id).unwrap();
         assert_eq!(
-            column, table,
-            "bundle column diverges from oracle_table for {id:?}"
+            typed, table,
+            "column {id:?} differs between the typed and id paths"
         );
     });
 }

@@ -94,30 +94,18 @@ where
     // `OpeningAlias` rows mirror the same `(aliased, source)` pairs — so
     // BlindFold's row layout cannot drift from the clear path's generated absorb
     // and `validate_aliases`.
-    let alias_pairs: Vec<_> = <crate::stages::stage3::outputs::InstructionInput<PCS::Field> as
-        crate::stages::relations::ConcreteSumcheck<PCS::Field>>::aliased_output_openings()
-        .into_iter()
-        .chain(<crate::stages::stage3::outputs::RegistersClaimReduction<PCS::Field> as
-            crate::stages::relations::ConcreteSumcheck<PCS::Field>>::aliased_output_openings())
-        .collect();
+    let alias_pairs: Vec<_> = <crate::stages::stage3::outputs::RegistersClaimReduction<PCS::Field> as
+        crate::stages::relations::ConcreteSumcheck<PCS::Field>>::aliased_output_openings();
     let aliased_targets: std::collections::BTreeSet<_> =
         alias_pairs.iter().map(|(aliased, _)| *aliased).collect();
 
     let zero = PCS::Field::zero();
-    let mut output_ids = relations::spartan::SpartanShiftOutputClaims::<PCS::Field> {
-        unexpanded_pc: zero,
-        pc: zero,
-        is_virtual: zero,
-        is_first_in_sequence: zero,
-        is_noop: zero,
-    }
-    .canonical_order();
+    let mut output_ids =
+        relations::spartan::SpartanShiftOutputClaims::<PCS::Field> { pc: zero }.canonical_order();
     output_ids.extend(
         relations::instruction::InstructionInputOutputClaims::<PCS::Field> {
             left_operand_is_rs1: zero,
             rs1_value: zero,
-            left_operand_is_pc: zero,
-            unexpanded_pc: zero,
             right_operand_is_rs2: zero,
             rs2_value: zero,
             right_operand_is_imm: zero,

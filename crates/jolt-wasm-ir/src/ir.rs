@@ -58,6 +58,11 @@ impl Reg {
         (slot < MAX_FRAME_SLOTS).then(|| Reg(Self::FRAME_BASE + slot as u8))
     }
 
+    /// The register with id `id`, for `id < REGISTER_COUNT`.
+    pub fn from_id(id: u8) -> Option<Reg> {
+        (usize::from(id) < REGISTER_COUNT).then_some(Reg(id))
+    }
+
     /// Temporary `T0 + i`, for `i < MAX_RESULTS`.
     pub fn temp(i: usize) -> Option<Reg> {
         (i < MAX_RESULTS).then(|| Reg(Self::T0.0 + i as u8))
@@ -83,7 +88,7 @@ pub enum Operand {
 
 /// How a row's two instruction inputs form its lookup index (mirrors Jolt's
 /// `AddOperands`/`SubtractOperands`/`MultiplyOperands` circuit flags).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum OperandMode {
     /// `interleave(left, right)`: a two-operand table.
     Interleaved,
@@ -99,7 +104,11 @@ pub enum OperandMode {
 /// comment gives the function of the instruction inputs `(x, y)`.
 ///
 /// Values are canonical: `i32` results are zero-extended to 64 bits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub enum AluOp {
     /// `(x + y) mod 2^bits` — `RangeCheck` at 64, `LowerHalfWord` at 32.
     Add(Width),
@@ -257,7 +266,11 @@ pub enum AssertFailure {
 }
 
 /// What an [`Ir::Advice`] row computes (the honest prover's witness).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub enum AdviceHint {
     /// Unsigned quotient `rs1 / rs2` (`0` when `rs2 == 0`).
     QuotientU,
@@ -327,12 +340,6 @@ pub enum Ir {
         rs1: Reg,
         rs2: Reg,
         target: Pc,
-    },
-    /// Grow linear memory by `rs` pages: `rd = previous size in pages`, or
-    /// `u32::MAX` on failure. Rewrites the memory-size word in RAM.
-    MemoryGrow {
-        rd: Reg,
-        rs: Reg,
     },
 }
 
@@ -405,6 +412,10 @@ pub struct IrFunction {
 
 /// Linear-memory limits in 64 KiB pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct MemoryLimits {
     pub initial_pages: u64,
     pub max_pages: u64,
@@ -424,11 +435,16 @@ pub struct IrProgram {
     pub functions: Vec<IrFunction>,
     /// Exported function name → function index.
     pub exports: BTreeMap<String, u32>,
+    /// Exported function name → its entry stub's pc. A stub starts from an
+    /// all-zero register file: it sets `SP`, runs the `start` function,
+    /// loads the parameters from the public input words, calls the function,
+    /// stores its results to the public output words, sets the termination
+    /// word, and jumps to [`IrProgram::HALT_PC`] — one contiguous trace.
+    pub entries: BTreeMap<String, Pc>,
     pub memory: MemoryLimits,
     /// Initial global values (zero-extended to 64 bits).
     pub globals: Vec<u64>,
     pub data: Vec<DataSegment>,
-    pub start: Option<u32>,
 }
 
 impl IrProgram {

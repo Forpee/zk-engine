@@ -13,7 +13,6 @@ use super::{
     },
 };
 use crate::{
-    preprocessing::JoltVerifierPreprocessing,
     proof::JoltProof,
     stages::{
         stage1::Stage1Output, stage2::Stage2Output, stage3::Stage3Output, stage4::Stage4Output,
@@ -30,7 +29,6 @@ use crate::{
 #[jolt_verifier_derive::fs_scope(Stage6a)]
 pub fn verify<PCS, VC, T, ZkProof>(
     checked: &CheckedInputs,
-    preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     proof: &JoltProof<PCS, VC, ZkProof>,
     formula_dimensions: &JoltFormulaDimensions,
     transcript: &mut T,
@@ -49,9 +47,7 @@ where
     // (full geometry at construction) for the prover's address-phase kernel;
     // the verifier itself never evaluates them here.
     let stage1_cycle_binding = stage1.cycle_binding_checked(JoltRelationId::BytecodeReadRaf)?;
-    let entry_bytecode_index = preprocessing
-        .program
-        .entry_bytecode_index_checked(JoltRelationId::BytecodeReadRaf)?;
+    let entry_bytecode_index = checked.entry_pc;
     let address_sumchecks = Stage6aSumchecks::build_from_parts(Stage6aBuildParts {
         formula_dimensions,
         committed_chunk_bits: proof.one_hot_config.committed_chunk_bits(),

@@ -10,8 +10,8 @@ use jolt_claims::protocols::jolt::{
 };
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
-use jolt_lookup_tables::XLEN as RISCV_XLEN;
 use jolt_openings::CommitmentScheme;
+use jolt_wasm_tables::XLEN;
 
 use crate::preprocessing::JoltVerifierPreprocessing;
 use crate::proof::JoltProof;
@@ -67,16 +67,11 @@ pub fn formula_dimensions_from_parts(
     ram_k: usize,
     stage: JoltRelationId,
 ) -> Result<JoltFormulaDimensions, VerifierError> {
-    JoltFormulaDimensions::try_from(one_hot_config.dimensions(
-        log_t,
-        2 * RISCV_XLEN,
-        bytecode_len,
-        ram_k,
-    ))
-    .map_err(|error| VerifierError::StageClaimPublicInputFailed {
-        stage,
-        reason: error.to_string(),
-    })
+    JoltFormulaDimensions::try_from(one_hot_config.dimensions(log_t, 2 * XLEN, bytecode_len, ram_k))
+        .map_err(|error| VerifierError::StageClaimPublicInputFailed {
+            stage,
+            reason: error.to_string(),
+        })
 }
 
 pub(crate) fn stage6_checked_split<'a, F: JoltField>(

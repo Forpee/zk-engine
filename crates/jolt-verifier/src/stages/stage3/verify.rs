@@ -36,7 +36,7 @@ pub fn stage3_input_values_from_upstream<F: JoltField>(
     stage2: &Stage2BatchOutputClaims<F>,
 ) -> Stage3InputClaims<F> {
     Stage3InputClaims {
-        shift: spartan_shift_input_values_from_upstream(stage1, stage2),
+        shift: spartan_shift_input_values_from_upstream(stage1),
         instruction_input: instruction_input_input_values_from_upstream(stage2),
         registers_claim_reduction: registers_claim_reduction_input_values_from_upstream(stage1),
     }

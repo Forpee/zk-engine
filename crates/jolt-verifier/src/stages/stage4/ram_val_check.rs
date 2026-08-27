@@ -28,7 +28,7 @@ use jolt_claims::protocols::jolt::{
 };
 use jolt_claims::SymbolicSumcheck;
 use jolt_field::JoltField;
-use jolt_poly::{block_selector_mle_msb, LtPolynomial};
+use jolt_poly::LtPolynomial;
 use jolt_transcript::{LabelWithCount, Transcript};
 
 use crate::stages::relations::ConcreteSumcheck;
@@ -501,56 +501,14 @@ pub struct RamValCheckAdviceBlock<F: JoltField> {
 /// `advice_selector`, so the two must stay in lockstep.
 fn ram_val_check_advice_block<F: JoltField>(
     kind: JoltAdviceKind,
-    checked: &CheckedInputs,
-    r_address: &[F],
+    _checked: &CheckedInputs,
+    _r_address: &[F],
 ) -> Result<RamValCheckAdviceBlock<F>, VerifierError> {
-    let layout = &checked.public_io.memory_layout;
-    let (start_address, max_size) = match kind {
-        JoltAdviceKind::Trusted => (layout.trusted_advice_start, layout.max_trusted_advice_size),
-        JoltAdviceKind::Untrusted => (
-            layout.untrusted_advice_start,
-            layout.max_untrusted_advice_size,
-        ),
-    };
-    if max_size == 0 {
-        return Err(public_input_failed(format!(
-            "{kind:?} advice commitment is present but configured size is zero"
-        )));
-    }
-    let start_index = u128::from(
-        layout
-            .remapped_word_address(start_address)
-            .map_err(public_input_failed)?,
-    );
-    let max_size = usize::try_from(max_size).map_err(|_| {
-        public_input_failed(format!("{kind:?} advice size {max_size} exceeds usize"))
-    })?;
-    // Floor division mirrors the shared advice geometry in jolt-claims
-    // (`geometry/dimensions.rs`): the advice block holds `max_size / 8` words.
-    #[expect(
-        clippy::integer_division,
-        reason = "floor division bytes -> words matches the prover-shared advice geometry"
-    )]
-    let advice_num_vars = crate::num::ilog2((max_size / 8).next_power_of_two());
-    let opening_start = r_address
-        .len()
-        .checked_sub(advice_num_vars)
-        .ok_or_else(|| {
-            public_input_failed(format!(
-                "{kind:?} advice point needs {advice_num_vars} variables but RAM address has {}",
-                r_address.len()
-            ))
-        })?;
-    let selector = block_selector_mle_msb(start_index, advice_num_vars, r_address)
-        .map_err(public_input_failed)?;
-    let opening_point = r_address
-        .get(opening_start..)
-        .ok_or_else(|| public_input_failed("advice opening point is out of range"))?
-        .to_vec();
-    Ok(RamValCheckAdviceBlock {
-        selector,
-        opening_point,
-    })
+    // The WASM layout has no advice regions; `validate_inputs` rejects advice
+    // commitments, so this is only reachable through an inconsistent proof.
+    Err(public_input_failed(format!(
+        "{kind:?} advice is not part of the WASM memory layout"
+    )))
 }
 
 /// Absorb the Fiat-Shamir domain separator for the RAM value-check gamma: an empty

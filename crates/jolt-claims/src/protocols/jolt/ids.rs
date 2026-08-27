@@ -1,5 +1,5 @@
 use derive_more::From;
-use jolt_riscv::{CircuitFlags, InstructionFlags};
+use jolt_wasm_ir::RowFlag;
 use serde::{Deserialize, Serialize};
 
 use crate::Expr;
@@ -460,18 +460,12 @@ impl JoltCommittedPolynomial {
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum JoltVirtualPolynomial {
     PC,
-    UnexpandedPC,
     NextPC,
-    NextUnexpandedPC,
-    NextIsNoop,
-    NextIsVirtual,
-    NextIsFirstInSequence,
     LeftLookupOperand,
     RightLookupOperand,
     LeftInstructionInput,
     RightInstructionInput,
     Product,
-    ShouldJump,
     ShouldBranch,
     Rd,
     Imm,
@@ -495,8 +489,9 @@ pub enum JoltVirtualPolynomial {
     RamValFinal,
     RamHammingWeight,
     UnivariateSkip,
-    OpFlags(CircuitFlags),
-    InstructionFlags(InstructionFlags),
+    /// One WebAssembly row flag column.
+    RowFlag(RowFlag),
+    /// One-hot selector of a `jolt_wasm_tables::WasmTable` by id.
     LookupTableFlag(usize),
     BytecodeValClaim(usize),
     BytecodeReadRafAddrClaim,

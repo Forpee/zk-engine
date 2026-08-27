@@ -47,6 +47,7 @@ members = [
   "crates/jolt-wasm-frontend",
   "crates/jolt-wasm-backend",
   "crates/jolt-wasm-tables",
+  "crates/jolt-wasm-program",
   "crates/jolt-transcript",
   "crates/jolt-utils",
   "crates/jolt-profiling",
@@ -452,6 +453,7 @@ jolt-wasm-ir = { path = "./crates/jolt-wasm-ir" }
 jolt-wasm-frontend = { path = "./crates/jolt-wasm-frontend" }
 jolt-wasm-backend = { path = "./crates/jolt-wasm-backend" }
 jolt-wasm-tables = { path = "./crates/jolt-wasm-tables" }
+jolt-wasm-program = { path = "./crates/jolt-wasm-program" }
 jolt-lookup-tables = { path = "./crates/jolt-lookup-tables" }
 jolt-platform = { path = "./jolt-platform", default-features = false }
 jolt-sdk = { path = "./jolt-sdk", default-features = false }

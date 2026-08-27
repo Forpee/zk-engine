@@ -2,7 +2,7 @@
 
 use jolt_claims::protocols::jolt::{JoltCommittedPolynomial, JoltPolynomialId};
 use jolt_field::Field;
-use jolt_program::preprocess::JoltProgramPreprocessing;
+use jolt_wasm_program::WasmProgramPreprocessing;
 
 use crate::{RowSource, Shape, WitnessBundle, WitnessError};
 
@@ -62,7 +62,7 @@ pub trait JoltWitnessOracle<F: Field> {
 /// fold, the reduction chunk grids, the program-image words) read it off the
 /// witness plane inside `prepare`.
 pub trait ProgramSource {
-    fn program_preprocessing(&self) -> &JoltProgramPreprocessing;
+    fn program_preprocessing(&self) -> &WasmProgramPreprocessing;
 }
 
 /// The full witness plane a prover kernel prepares against: the id-indexed

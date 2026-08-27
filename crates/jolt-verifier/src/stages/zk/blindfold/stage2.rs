@@ -152,7 +152,7 @@ where
         .map_err(|error| public_error(JoltRelationId::RamRafEvaluation, error))?;
     let ram_raf_unmap_address = IdentityPolynomial::new(log_k).evaluate(&ram_raf_address)
         * PCS::Field::from_u64(8)
-        + PCS::Field::from_u64(input.checked.public_io.memory_layout.get_lowest_address());
+        + PCS::Field::from_u64(RAM_BASE);
     values.public(
         JoltDerivedId::from(RamRafEvaluationPublic::UnmapAddress),
         ram_raf_unmap_address,
@@ -187,12 +187,8 @@ where
     let product_order = relations::spartan::ProductRemainderOutputClaims::<PCS::Field> {
         left_instruction_input: PCS::Field::zero(),
         right_instruction_input: PCS::Field::zero(),
-        jump_flag: PCS::Field::zero(),
-        write_lookup_output_to_rd: PCS::Field::zero(),
         lookup_output: PCS::Field::zero(),
         branch_flag: PCS::Field::zero(),
-        next_is_noop: PCS::Field::zero(),
-        virtual_instruction: PCS::Field::zero(),
     }
     .canonical_order();
     let instruction_outputs =
@@ -279,7 +275,7 @@ where
 fn selected_product_uniskip_input_expr<F: JoltField>(
     weights: &[F],
 ) -> Result<VerifierExpr<F>, VerifierError> {
-    let [product_weight, should_branch_weight, should_jump_weight, rest @ ..] = weights else {
+    let [product_weight, should_branch_weight, rest @ ..] = weights else {
         return Err(VerifierError::BlindFoldConstructionFailed {
             reason: format!(
                 "stage2.product_uniskip: expected {} weights, got {}",
@@ -292,10 +288,6 @@ fn selected_product_uniskip_input_expr<F: JoltField>(
         + scale_expr(
             opening(product_should_branch_outer_opening()),
             *should_branch_weight,
-        )
-        + scale_expr(
-            opening(product_should_jump_outer_opening()),
-            *should_jump_weight,
         );
 
     if !rest.is_empty() {
@@ -313,8 +305,7 @@ fn selected_product_remainder_output_expr<F: JoltField>(
     weights: &[F],
     tau_kernel: F,
 ) -> Result<VerifierExpr<F>, VerifierError> {
-    let [instruction_product_weight, should_branch_weight, should_jump_weight, rest @ ..] = weights
-    else {
+    let [instruction_product_weight, should_branch_weight, rest @ ..] = weights else {
         return Err(VerifierError::BlindFoldConstructionFailed {
             reason: format!(
                 "stage2.batch: expected {} product weights, got {}",
@@ -326,14 +317,11 @@ fn selected_product_remainder_output_expr<F: JoltField>(
     let left_base = scale_expr(
         opening(left_instruction_input_product()),
         *instruction_product_weight,
-    ) + scale_expr(opening(lookup_output_product()), *should_branch_weight)
-        + scale_expr(opening(jump_flag_product()), *should_jump_weight);
+    ) + scale_expr(opening(lookup_output_product()), *should_branch_weight);
     let right_base = scale_expr(
         opening(right_instruction_input_product()),
         *instruction_product_weight,
-    ) + scale_expr(opening(branch_flag_product()), *should_branch_weight)
-        + scale_expr(VerifierExpr::one(), *should_jump_weight)
-        + scale_expr(opening(next_is_noop_product()), -*should_jump_weight);
+    ) + scale_expr(opening(branch_flag_product()), *should_branch_weight);
 
     let (left, right) = {
         if !rest.is_empty() {

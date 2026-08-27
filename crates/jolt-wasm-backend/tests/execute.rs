@@ -22,7 +22,7 @@ fn run(wat: &str, entry: &str, args: &[u64]) -> Execution {
         .unwrap()
         .invoke(entry, args)
         .expect("execution");
-    check_records(&program, &execution);
+    check_records(&program, entry, &execution);
     execution
 }
 
@@ -33,19 +33,18 @@ fn call(wat: &str, entry: &str, args: &[u64]) -> Result<Vec<u64>, ExecutionError
         .map(|e| e.results)
 }
 
-/// Every record is a valid proof-row witness: the pc chains within each
-/// host-call segment, ZERO is never written, every recorded instruction is
-/// the one at its pc, and every RAM access is an aligned 64-bit word.
-fn check_records(program: &IrProgram, execution: &Execution) {
+/// Every record is a valid proof-row witness: the pc chains over the whole
+/// trace (one segment from the entry stub to `Halt`), ZERO is never
+/// written, every recorded instruction is the one at its pc, and every RAM
+/// access is an aligned 64-bit word.
+fn check_records(program: &IrProgram, entry: &str, execution: &Execution) {
     let mut expected_pc = None;
     for record in &execution.records {
         assert_eq!(program.code[record.pc as usize], record.instruction);
         if let Some(pc) = expected_pc {
             assert_eq!(record.pc, pc, "pc chain broken");
         }
-        // A `Halt` ends a host-call segment; the next segment starts wherever
-        // the host placed the pc.
-        expected_pc = (!matches!(record.instruction, Ir::Halt)).then_some(record.next_pc);
+        expected_pc = Some(record.next_pc);
         if let Some(w) = record.rd {
             assert_ne!(w.register, Reg::ZERO);
         }
@@ -63,6 +62,11 @@ fn check_records(program: &IrProgram, execution: &Execution) {
         execution.records.last().map(|r| r.instruction),
         Some(Ir::Halt)
     ));
+    assert!(execution.terminated);
+    assert_eq!(
+        execution.records[0].pc, program.entries[entry],
+        "trace starts at the stub"
+    );
 }
 
 const FIB: &str = r#"
@@ -123,7 +127,7 @@ fn memory_data_segment_and_narrow_access() {
         .records
         .iter()
         .find_map(|r| match r.ram {
-            RamAccess::Write(w) => Some(w),
+            RamAccess::Write(w) if w.address >= LINEAR_MEMORY_BASE => Some(w),
             _ => None,
         })
         .unwrap();

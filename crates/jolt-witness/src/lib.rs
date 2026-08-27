@@ -9,7 +9,8 @@
 //! ```
 //!
 //! A witness is an atomic value newtype with a single-sourced derivation from
-//! a trace row. Backends serve them two ways: the object-safe id-indexed
+//! a [`TraceRow`] (the WebAssembly proof row, `jolt_wasm_program::WasmTraceRow`).
+//! Backends serve them two ways: the object-safe id-indexed
 //! [`JoltWitnessOracle`] (the naive interpreter's path — one exhaustive match
 //! over jolt-claims ids, no wildcard) and typed bundles over the streaming
 //! pass. This crate defines **no id vocabulary of its own** — all ids are
@@ -22,8 +23,6 @@
 extern crate self as jolt_witness;
 
 pub mod backend;
-#[cfg(feature = "field-inline")]
-pub mod field_inline;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod testing;
 pub mod witnesses;
@@ -47,16 +46,22 @@ pub use consumer::{
 pub use error::WitnessError;
 pub use shape::{PolynomialEncoding, Shape};
 
+/// The proof-facing trace row every witness derives from.
+pub type TraceRow = jolt_wasm_program::WasmTraceRow;
+
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::TraceRow;
     pub use jolt_claims::protocols::jolt::{
         JoltCommittedPolynomial, JoltPolynomialId, JoltVirtualPolynomial,
     };
-    pub use jolt_riscv::JoltTraceRow as TraceRow;
 }
 
-/// XLEN of the RV64 Jolt VM this crate derives witnesses for.
-pub const RV64_XLEN: usize = 64;
+/// Word size of the WebAssembly Jolt VM this crate derives witnesses for.
+pub const XLEN: usize = 64;
+
+/// The full instruction lookup key width: two `XLEN`-bit operands.
+pub const LOOKUP_ADDRESS_BITS: usize = 2 * XLEN;
 
 /// Error label for the Jolt VM witness backend.
 pub(crate) const JOLT_VM_LABEL: &str = "jolt_vm";

@@ -77,20 +77,19 @@ impl SymbolicSumcheck for ReadRaf {
 mod tests {
     use super::*;
     use crate::protocols::jolt::geometry::bytecode::{
-        bytecode_ra, imm_spartan_outer, instruction_flag_input, instruction_flag_product,
-        instruction_flag_shift, op_flag_product, op_flag_shift, pc_spartan_outer,
-        unexpanded_pc_spartan_outer,
+        bytecode_ra, imm_spartan_outer, pc_spartan_outer, row_flag_product,
     };
-    use crate::protocols::jolt::geometry::instruction::{imm, instruction_raf_flag};
+    use crate::protocols::jolt::geometry::instruction::{
+        imm, instruction_raf_flag, row_flag_input,
+    };
     use crate::protocols::jolt::geometry::registers::{
         rd_wa_read_write, rd_wa_val_evaluation, rs1_ra_read_write, rs2_ra_read_write,
     };
     use crate::protocols::jolt::geometry::spartan::pc_shift;
-    use crate::protocols::jolt::geometry::spartan::unexpanded_pc_shift;
     use crate::protocols::jolt::{BytecodeReadRafPublic, JoltPolynomialId, JoltVirtualPolynomial};
     use jolt_field::{Fr, Ring};
-    use jolt_lookup_tables::{LookupTableKind, XLEN};
-    use jolt_riscv::{CircuitFlags, InstructionFlags, CIRCUIT_FLAGS};
+    use jolt_wasm_ir::RowFlag;
+    use jolt_wasm_tables::WasmTable;
 
     fn dimensions(num_committed_ra_polys: usize) -> BytecodeReadRafDimensions {
         BytecodeReadRafDimensions::new(5, 10, num_committed_ra_polys)
@@ -123,6 +122,7 @@ mod tests {
         let gamma = Fr::from_u64(3);
         let stage1_gamma = Fr::from_u64(5);
         let stage2_gamma = Fr::from_u64(7);
+        let _ = stage2_gamma;
         let stage3_gamma = Fr::from_u64(11);
         let stage4_gamma = Fr::from_u64(13);
         let stage5_gamma = Fr::from_u64(17);
@@ -130,31 +130,12 @@ mod tests {
 
         let input = relation.input_expression::<Fr>().evaluate(
             |id| match *id {
-                id if id == unexpanded_pc_spartan_outer() => Fr::from_u64(19),
                 id if id == imm_spartan_outer() => Fr::from_u64(23),
-                id if id == op_flag_product(CircuitFlags::Jump) => Fr::from_u64(29),
-                id if id == instruction_flag_product(InstructionFlags::Branch) => Fr::from_u64(31),
-                id if id == op_flag_product(CircuitFlags::WriteLookupOutputToRD) => {
-                    Fr::from_u64(37)
-                }
-                id if id == op_flag_product(CircuitFlags::VirtualInstruction) => Fr::from_u64(41),
+                id if id == row_flag_product(RowFlag::Branch) => Fr::from_u64(31),
                 id if id == imm() => Fr::from_u64(43),
-                id if id == unexpanded_pc_shift() => Fr::from_u64(47),
-                id if id == instruction_flag_input(InstructionFlags::LeftOperandIsRs1Value) => {
-                    Fr::from_u64(53)
-                }
-                id if id == instruction_flag_input(InstructionFlags::LeftOperandIsPC) => {
-                    Fr::from_u64(59)
-                }
-                id if id == instruction_flag_input(InstructionFlags::RightOperandIsRs2Value) => {
-                    Fr::from_u64(61)
-                }
-                id if id == instruction_flag_input(InstructionFlags::RightOperandIsImm) => {
-                    Fr::from_u64(67)
-                }
-                id if id == instruction_flag_shift(InstructionFlags::IsNoop) => Fr::from_u64(71),
-                id if id == op_flag_shift(CircuitFlags::VirtualInstruction) => Fr::from_u64(73),
-                id if id == op_flag_shift(CircuitFlags::IsFirstInSequence) => Fr::from_u64(79),
+                id if id == row_flag_input(RowFlag::LeftIsRs1) => Fr::from_u64(53),
+                id if id == row_flag_input(RowFlag::RightIsRs2) => Fr::from_u64(61),
+                id if id == row_flag_input(RowFlag::RightIsImm) => Fr::from_u64(67),
                 id if id == rd_wa_read_write() => Fr::from_u64(83),
                 id if id == rs1_ra_read_write() => Fr::from_u64(89),
                 id if id == rs2_ra_read_write() => Fr::from_u64(97),
@@ -163,9 +144,9 @@ mod tests {
                 id if id == pc_spartan_outer() => Fr::from_u64(107),
                 id if id == pc_shift() => Fr::from_u64(109),
                 JoltOpeningId::Polynomial {
-                    polynomial: JoltPolynomialId::Virtual(JoltVirtualPolynomial::OpFlags(flag)),
+                    polynomial: JoltPolynomialId::Virtual(JoltVirtualPolynomial::RowFlag(flag)),
                     relation: JoltRelationId::SpartanOuter,
-                } => Fr::from_u64(200 + u64::from(flag as u8)),
+                } => Fr::from_u64(200 + u64::from(flag.bit())),
                 JoltOpeningId::Polynomial {
                     polynomial:
                         JoltPolynomialId::Virtual(JoltVirtualPolynomial::LookupTableFlag(index)),
@@ -195,29 +176,21 @@ mod tests {
             |_| zero,
         );
 
-        let mut stage1 = Fr::from_u64(19) + stage1_gamma * Fr::from_u64(23);
-        for flag in CIRCUIT_FLAGS {
-            stage1 += gamma_power(stage1_gamma, usize::from(flag as u8) + 2)
-                * Fr::from_u64(200 + u64::from(flag as u8));
+        let mut stage1 = Fr::from_u64(23);
+        for flag in RowFlag::ALL {
+            stage1 += gamma_power(stage1_gamma, usize::from(flag.bit() as u8) + 1)
+                * Fr::from_u64(200 + u64::from(flag.bit()));
         }
-        let stage2 = Fr::from_u64(29)
-            + stage2_gamma * Fr::from_u64(31)
-            + gamma_power(stage2_gamma, 2) * Fr::from_u64(37)
-            + gamma_power(stage2_gamma, 3) * Fr::from_u64(41);
+        let stage2 = Fr::from_u64(31);
         let stage3 = Fr::from_u64(43)
-            + stage3_gamma * Fr::from_u64(47)
-            + gamma_power(stage3_gamma, 2) * Fr::from_u64(53)
-            + gamma_power(stage3_gamma, 3) * Fr::from_u64(59)
-            + gamma_power(stage3_gamma, 4) * Fr::from_u64(61)
-            + gamma_power(stage3_gamma, 5) * Fr::from_u64(67)
-            + gamma_power(stage3_gamma, 6) * Fr::from_u64(71)
-            + gamma_power(stage3_gamma, 7) * Fr::from_u64(73)
-            + gamma_power(stage3_gamma, 8) * Fr::from_u64(79);
+            + stage3_gamma * Fr::from_u64(53)
+            + gamma_power(stage3_gamma, 2) * Fr::from_u64(61)
+            + gamma_power(stage3_gamma, 3) * Fr::from_u64(67);
         let stage4 = Fr::from_u64(83)
             + stage4_gamma * Fr::from_u64(89)
             + gamma_power(stage4_gamma, 2) * Fr::from_u64(97);
         let mut stage5 = Fr::from_u64(101) + stage5_gamma * Fr::from_u64(103);
-        for table in LookupTableKind::<XLEN>::iter() {
+        for table in WasmTable::iter() {
             stage5 += gamma_power(stage5_gamma, table.index() + 2)
                 * Fr::from_u64(300 + table.index() as u64);
         }

@@ -169,36 +169,28 @@ pub fn bytecode_read_raf_address_phase_input_values_from_upstream<F: JoltField>(
     let registers_read_write = &stage4.registers_read_write;
     let instruction_read_raf = &stage5.instruction_read_raf;
     BytecodeReadRafAddressPhaseInputClaims {
-        outer_unexpanded_pc: outer.unexpanded_pc,
         outer_imm: outer.imm,
+        outer_left_is_rs1: outer.left_is_rs1,
+        outer_right_is_rs2: outer.right_is_rs2,
+        outer_right_is_imm: outer.right_is_imm,
         outer_add_operands: outer.add_operands,
-        outer_subtract_operands: outer.subtract_operands,
-        outer_multiply_operands: outer.multiply_operands,
+        outer_sub_operands: outer.sub_operands,
+        outer_mul_operands: outer.mul_operands,
+        outer_write_lookup_to_rd: outer.write_lookup_to_rd,
         outer_load: outer.load,
         outer_store: outer.store,
         outer_jump: outer.jump,
-        outer_write_lookup_output_to_rd: outer.write_lookup_output_to_rd,
-        outer_virtual_instruction: outer.virtual_instruction,
+        outer_branch: outer.branch,
         outer_assert: outer.assert,
-        outer_do_not_update_unexpanded_pc: outer.do_not_update_unexpanded_pc,
+        outer_halt: outer.halt,
+        outer_trap: outer.trap,
         outer_advice: outer.advice,
-        outer_is_compressed: outer.is_compressed,
-        outer_is_first_in_sequence: outer.is_first_in_sequence,
-        outer_is_last_in_sequence: outer.is_last_in_sequence,
         outer_pc: outer.pc,
-        product_jump: product.jump_flag,
         product_branch: product.branch_flag,
-        product_write_lookup_output_to_rd: product.write_lookup_output_to_rd,
-        product_virtual_instruction: product.virtual_instruction,
         instruction_input_imm: instruction_input.imm,
-        shift_unexpanded_pc: shift.unexpanded_pc,
-        left_operand_is_rs1_value: instruction_input.left_operand_is_rs1,
-        left_operand_is_pc: instruction_input.left_operand_is_pc,
-        right_operand_is_rs2_value: instruction_input.right_operand_is_rs2,
+        left_operand_is_rs1: instruction_input.left_operand_is_rs1,
+        right_operand_is_rs2: instruction_input.right_operand_is_rs2,
         right_operand_is_imm: instruction_input.right_operand_is_imm,
-        is_noop: shift.is_noop,
-        shift_virtual_instruction: shift.is_virtual,
-        shift_is_first_in_sequence: shift.is_first_in_sequence,
         shift_pc: shift.pc,
         rd_wa_read_write: registers_read_write.rd_wa,
         rs1_ra: registers_read_write.rs1_ra,
@@ -327,9 +319,8 @@ impl<F: JoltField> ConcreteSumcheck<F> for BytecodeReadRafAddressPhase<F> {
 mod tests {
     use super::*;
     use crate::stages::relations::draw_recording::{record, DrawEvent};
+    use jolt_claims::protocols::jolt::geometry::bytecode::BYTECODE_STAGE_GAMMA_COUNTS;
     use jolt_field::Fr;
-    use jolt_lookup_tables::{LookupTableKind, XLEN as RISCV_XLEN};
-    use jolt_riscv::NUM_CIRCUIT_FLAGS;
     use jolt_transcript::Transcript;
 
     // The address phase has the only multi-field `Challenges` (gamma + five stage
@@ -354,15 +345,16 @@ mod tests {
         );
 
         // Inline: six `challenge_scalar_powers(..)`, each contributing its
-        // degree-1 power.
+        // degree-1 power (one squeeze regardless of the power count, so a
+        // single-gamma stage is probed with two powers).
         let (inline_events, inline_gammas) = record(|t| {
             [
                 t.challenge_scalar_powers(8)[1],
-                t.challenge_scalar_powers(2 + NUM_CIRCUIT_FLAGS)[1],
-                t.challenge_scalar_powers(4)[1],
-                t.challenge_scalar_powers(9)[1],
-                t.challenge_scalar_powers(3)[1],
-                t.challenge_scalar_powers(2 + LookupTableKind::<RISCV_XLEN>::COUNT)[1],
+                t.challenge_scalar_powers(BYTECODE_STAGE_GAMMA_COUNTS[0].max(2))[1],
+                t.challenge_scalar_powers(BYTECODE_STAGE_GAMMA_COUNTS[1].max(2))[1],
+                t.challenge_scalar_powers(BYTECODE_STAGE_GAMMA_COUNTS[2].max(2))[1],
+                t.challenge_scalar_powers(BYTECODE_STAGE_GAMMA_COUNTS[3].max(2))[1],
+                t.challenge_scalar_powers(BYTECODE_STAGE_GAMMA_COUNTS[4].max(2))[1],
             ]
         });
         let (draw_events, challenges) = record(|t| relation.draw_challenges(t).unwrap());

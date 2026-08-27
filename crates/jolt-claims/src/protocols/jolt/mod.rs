@@ -1,5 +1,4 @@
 pub mod geometry;
-pub mod lattice;
 pub mod relations;
 
 mod ids;

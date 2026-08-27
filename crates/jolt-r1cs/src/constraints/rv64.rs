@@ -97,7 +97,7 @@ type ConstraintRows<F> = (Vec<SparseRow<F>>, Vec<SparseRow<F>>, Vec<SparseRow<F>
     clippy::expect_used,
     reason = "compile-time constant table; silent i128→i64 truncation would be a correctness bug"
 )]
-fn row<F: Field>(entries: &[(usize, i128)]) -> SparseRow<F> {
+pub(super) fn row<F: Field>(entries: &[(usize, i128)]) -> SparseRow<F> {
     entries
         .iter()
         .filter(|(_, c)| *c != 0)
@@ -110,7 +110,7 @@ fn row<F: Field>(entries: &[(usize, i128)]) -> SparseRow<F> {
 
 /// Helper: sparse row entry from i128 coefficient, handling large constants
 /// that don't fit in i64 (e.g. 2^64 bias).
-fn row_wide<F: Field>(entries: &[(usize, i128)]) -> SparseRow<F> {
+pub(super) fn row_wide<F: Field>(entries: &[(usize, i128)]) -> SparseRow<F> {
     entries
         .iter()
         .filter(|(_, c)| *c != 0)

@@ -1,36 +1,31 @@
-use jolt_field::{
-    signed::{S128, S64},
-    JoltField,
-};
-use jolt_lookup_tables::LookupQuery;
-use jolt_riscv::JoltTraceRow as TraceRow;
+use jolt_field::JoltField;
 
-use super::{lookup_query, Extract, ToField, WitnessEnv};
-use crate::WitnessError;
-use crate::RV64_XLEN;
+use super::{Extract, ToField, WitnessEnv};
+use crate::{TraceRow, WitnessError};
 
-/// Left lookup operand of the instruction's lookup query.
+/// Left lookup operand of the row's lookup.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LeftLookupOperand(pub u64);
 
-/// Right lookup operand of the instruction's lookup query.
+/// Right lookup operand of the row's lookup (the raw index for
+/// combined-operand and advice rows).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RightLookupOperand(pub u128);
 
-/// Left instruction input (rs1 value or PC, per the instruction shape).
+/// Left instruction input (`rs1` or 0, per the row flags).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LeftInstructionInput(pub u64);
 
-/// Right instruction input (rs2 value or immediate, per the instruction
-/// shape).
+/// Right instruction input (`rs2`, the immediate, or 0, per the row flags).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RightInstructionInput(pub i128);
+pub struct RightInstructionInput(pub u64);
 
-/// Signed 128-bit truncated product of the instruction inputs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Product(pub S128);
+/// Product of the instruction inputs (exact: two 64-bit values).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Product(pub u128);
 
-/// The instruction's immediate operand.
+/// The row's immediate as the constraints see it (signed byte offset on
+/// memory rows).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Imm(pub i128);
 
@@ -46,8 +41,7 @@ impl Extract for LeftLookupOperand {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        let (left, _) = LookupQuery::<RV64_XLEN>::to_lookup_operands(&lookup_query(row));
-        Ok(Self(left))
+        Ok(Self(row.lookup_operands().0))
     }
 }
 
@@ -63,8 +57,7 @@ impl Extract for RightLookupOperand {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        let (_, right) = LookupQuery::<RV64_XLEN>::to_lookup_operands(&lookup_query(row));
-        Ok(Self(right))
+        Ok(Self(row.lookup_operands().1))
     }
 }
 
@@ -80,14 +73,13 @@ impl Extract for LeftInstructionInput {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        let (left, _) = LookupQuery::<RV64_XLEN>::to_instruction_inputs(&lookup_query(row));
-        Ok(Self(left))
+        Ok(Self(row.left_input()))
     }
 }
 
 impl ToField for RightInstructionInput {
     fn to_field<F: JoltField>(self) -> F {
-        F::from_i128(self.0)
+        F::from_u64(self.0)
     }
 }
 
@@ -97,25 +89,13 @@ impl Extract for RightInstructionInput {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        let (_, right) = LookupQuery::<RV64_XLEN>::to_instruction_inputs(&lookup_query(row));
-        Ok(Self(right))
+        Ok(Self(row.right_input()))
     }
 }
 
 impl ToField for Product {
-    /// The product may exceed `i128`: fall back to the sign/magnitude split
-    /// when the truncated representation does not fit.
     fn to_field<F: JoltField>(self) -> F {
-        if let Some(value) = self.0.to_i128() {
-            F::from_i128(value)
-        } else {
-            let magnitude = self.0.magnitude_as_u128();
-            if self.0.is_positive {
-                F::from_u128(magnitude)
-            } else {
-                -F::from_u128(magnitude)
-            }
-        }
+        F::from_u128(self.0)
     }
 }
 
@@ -125,9 +105,8 @@ impl Extract for Product {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        let (left, right) = LookupQuery::<RV64_XLEN>::to_instruction_inputs(&lookup_query(row));
         Ok(Self(
-            S64::from_u64(left).mul_trunc::<2, 2>(&S128::from_i128(right)),
+            u128::from(row.left_input()) * u128::from(row.right_input()),
         ))
     }
 }
@@ -144,6 +123,6 @@ impl Extract for Imm {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        Ok(Self(row.imm()))
+        Ok(Self(row.imm_signed()))
     }
 }

@@ -9,8 +9,8 @@ use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
 use jolt_openings::CommitmentScheme;
 use jolt_poly::sparse_segments_mle_msb;
-use jolt_program::preprocess::PublicInitialRam;
 use jolt_transcript::Transcript;
+use jolt_wasm_program::{PublicInitialRam, PublicMemorySegment};
 
 use super::{
     outputs::{
@@ -233,13 +233,9 @@ where
     // In committed program mode the image words are bound via the staged
     // `ProgramImageInitContributionRw` opening, so only inputs are public here.
     let public_initial_ram = match preprocessing.program.as_full() {
-        Some(full) => PublicInitialRam::new(&full.ram, &checked.public_io),
-        None => PublicInitialRam::inputs_only(&checked.public_io),
-    }
-    .map_err(|error| VerifierError::StageClaimPublicInputFailed {
-        stage: JoltRelationId::RamValCheck,
-        reason: error.to_string(),
-    })?;
+        Some(full) => PublicInitialRam::new(full, &checked.public_io),
+        None => PublicInitialRam::inputs_only(preprocessing.program.memory(), &checked.public_io),
+    };
     validate_segments_in_domain(&public_initial_ram.segments, checked.ram_K)?;
 
     Ok(sparse_segments_mle_msb(
@@ -256,7 +252,7 @@ where
 /// otherwise wrap `start + len` back into the domain and bypass the bound.
 #[expect(non_snake_case, reason = "ram_K is the codebase's math-variable name")]
 fn validate_segments_in_domain(
-    segments: &[jolt_program::preprocess::PublicMemorySegment],
+    segments: &[PublicMemorySegment],
     ram_K: usize,
 ) -> Result<(), VerifierError> {
     for segment in segments {
@@ -280,9 +276,7 @@ fn validate_segments_in_domain(
 
 #[cfg(test)]
 mod tests {
-    use jolt_program::preprocess::PublicMemorySegment;
-
-    use super::validate_segments_in_domain;
+    use super::{validate_segments_in_domain, PublicMemorySegment};
 
     /// Regression: `start + len` computed with wrapping arithmetic would fold
     /// a `start_index` near `u128::MAX` back into `[0, ram_K)` and admit an

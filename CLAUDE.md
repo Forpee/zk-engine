@@ -84,7 +84,7 @@ The span taxonomy (versioned, normative) lives in `crates/jolt-profiling/src/tax
 ### zkWASM Direction
 
 The repo is being re-targeted from RISC-V to WebAssembly (decided 2026-08-27; RISC-V
-support is being abandoned, not maintained). The WASM stack is four crates — see
+support is being abandoned, not maintained). The WASM stack is five crates — see
 `specs/zkwasm-frontend.md`:
 
 - **crates/jolt-wasm-ir** (no deps): the contract between frontend and backend —
@@ -95,27 +95,42 @@ support is being abandoned, not maintained). The WASM stack is four crates — s
   operator with its static operand-stack height) and `WasmModule::lower` → `IrProgram`.
   The lowering is an instruction selector: stack slots are static registers from
   `Reg::FRAME_BASE` (`ZERO`, `SP`, `RA`, `T0..T4` reserved), calls spill to a RAM shadow
-  stack, and every WASM operator without a table (`div`/`rem`, `shl`/`rotl`, sub-word
-  memory, byte sign-extension, 32-bit signed compares) is expanded over catalog rows +
-  `Advice` + `Assert` (list in `lower.rs` module docs). Add operators the same way, never
-  as new opaque ops
+  stack, and every WASM operator without a table (`div`/`rem`, `shl`/`rotl`, `memory.grow`,
+  sub-word memory, byte sign-extension, 32-bit signed compares) is expanded over catalog
+  rows + `Advice` + `Assert` (list in `lower.rs` module docs). Add operators the same way,
+  never as new opaque ops. Each export gets an entry stub (`IrProgram::entries`): zero
+  registers → set `SP`, run `start`, load args from the public input words, call, store
+  results to the output words, set the termination word, `Halt` — one contiguous trace
 - **crates/jolt-wasm-backend**: guest `Memory`, the reference `Machine` emitting one
   `Record` per instruction, and the proof-row model — `RowModel::row_spec` gives each
   `Ir` its `RowFlags` + operands + `Lookup`; `check_record` is the constraint-form spec
   of the WASM uniform R1CS. Every record RAM access is an aligned 64-bit word (Twist stays
-  doubleword-addressable)
+  doubleword-addressable); all regions sit inside Jolt's RAM window (≥ `0x8000_0000`),
+  with public I/O in memory (`layout::{INPUTS_BASE, OUTPUTS_BASE, TERMINATION_ADDR}`)
 - **crates/jolt-wasm-tables**: `WasmTable` — the WASM table catalog (the analogue of the
   RV64 `LookupTableKind`, kept separate because the legacy prover mirrors that enum),
   `WasmTable::of(AluOp)`, `lookup_index`. The WASM-only tables `clz`/`ctz`/`popcnt` live
   in `jolt-lookup-tables` (`tables/{clz,ctz,popcnt}.rs` + prefixes/suffixes) but are
   deliberately not in `LookupTableKind`
 
+- **crates/jolt-wasm-program**: proof-side preprocessing — `WasmBytecode::preprocess`
+  (packed `BytecodeRow` per pc = the static half of a proof row, `Halt`-padded to a power
+  of two, `BytecodeColumn` accessors for the read-RAF folds, canonical `encode`) and
+  `initial_memory_words`/`final_public_words` + `PublicIo` (the RAM argument's initial
+  state and the public final words); `WasmProgramPreprocessing` bundles the program view
+  with the memory limits and trace budget. `WasmTraceRow` (64 B,
+  `build_trace_rows`) is the proof-facing row built from `Record`s with the
+  `JoltTraceRow`-style accessor API; it recomputes its own lookup index/output from its
+  flags and table id. `r1cs::cycle_witness` fills the per-cycle witness of the WASM
+  uniform R1CS (`jolt_r1cs::constraints::wasm`, a sibling of `rv64`; `check_record` is its
+  executable spec — change both together)
+
 The frontend never depends on the backend and vice versa (the backend's and tables'
 e2e tests use the frontend as a dev-dependency only).
 
 ```bash
-cargo nextest run -p jolt-wasm-ir -p jolt-wasm-frontend -p jolt-wasm-backend -p jolt-wasm-tables --cargo-quiet
-cargo clippy -p jolt-wasm-ir -p jolt-wasm-frontend -p jolt-wasm-backend -p jolt-wasm-tables --all-targets -q -- -D warnings
+cargo nextest run -p jolt-wasm-ir -p jolt-wasm-frontend -p jolt-wasm-backend -p jolt-wasm-tables -p jolt-wasm-program --cargo-quiet
+cargo clippy -p jolt-wasm-ir -p jolt-wasm-frontend -p jolt-wasm-backend -p jolt-wasm-tables -p jolt-wasm-program -p jolt-r1cs --all-targets -q -- -D warnings
 cargo nextest run -p jolt-lookup-tables --cargo-quiet -E 'test(/tables::(clz|ctz|popcnt)::/)'
 ```
 

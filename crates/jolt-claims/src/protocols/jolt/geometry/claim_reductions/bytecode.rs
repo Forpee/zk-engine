@@ -10,10 +10,10 @@
 //! committed-bytecode geometry of `zkvm/bytecode/chunks.rs`.
 
 use jolt_field::{JoltField, Ring};
-use jolt_lookup_tables::{LookupTableKind, XLEN};
 use jolt_poly::EqPolynomial;
-use jolt_riscv::{CircuitFlags, InstructionFlags, NUM_CIRCUIT_FLAGS, NUM_INSTRUCTION_FLAGS};
 use jolt_utils::log2_power_of_two;
+use jolt_wasm_ir::RowFlag;
+use jolt_wasm_tables::WasmTable;
 
 use crate::{derived, opening};
 
@@ -34,21 +34,13 @@ use super::precommitted::{
 /// Number of staged `BytecodeValClaim(i)` claims batched into the reduction:
 /// the five base flag stages, plus (akita) the `OpFlags(Store)` stage the
 /// `IncVirtualization` phase consumes as its destination selector.
-#[cfg(not(feature = "akita"))]
 pub const NUM_BYTECODE_VAL_STAGES: usize = 5;
-#[cfg(feature = "akita")]
-pub const NUM_BYTECODE_VAL_STAGES: usize = 6;
 
 const REGISTER_COUNT: usize = 1 << REGISTER_ADDRESS_BITS;
 
 /// Total number of lanes encoded by committed-bytecode rows.
 pub const fn total_lanes() -> usize {
-    3 * REGISTER_COUNT
-        + 2
-        + NUM_CIRCUIT_FLAGS
-        + NUM_INSTRUCTION_FLAGS
-        + LookupTableKind::<XLEN>::COUNT
-        + 1
+    3 * REGISTER_COUNT + 2 + RowFlag::COUNT + WasmTable::COUNT + 1
 }
 
 /// Fixed lane capacity for committed bytecode rows.
@@ -89,18 +81,16 @@ const fn is_valid_chunk_count(chunk_count: usize) -> bool {
 }
 
 /// Lane offsets of the committed bytecode row encoding. One-hot `rs1`/`rs2`/
-/// `rd` blocks are followed by scalar unexpanded-PC and immediate lanes, the
-/// circuit and instruction flag blocks, the lookup-table selector block, and
-/// the RAF flag.
+/// `rd` blocks are followed by scalar pc and immediate lanes, the row-flag
+/// block, the lookup-table selector block, and the RAF flag.
 #[derive(Clone, Copy, Debug)]
 pub struct BytecodeLaneLayout {
     pub rs1_start: usize,
     pub rs2_start: usize,
     pub rd_start: usize,
-    pub unexp_pc_idx: usize,
+    pub pc_idx: usize,
     pub imm_idx: usize,
-    pub circuit_start: usize,
-    pub instr_start: usize,
+    pub flag_start: usize,
     pub lookup_start: usize,
     pub raf_flag_idx: usize,
 }
@@ -110,20 +100,18 @@ impl BytecodeLaneLayout {
         let rs1_start = 0usize;
         let rs2_start = rs1_start + REGISTER_COUNT;
         let rd_start = rs2_start + REGISTER_COUNT;
-        let unexp_pc_idx = rd_start + REGISTER_COUNT;
-        let imm_idx = unexp_pc_idx + 1;
-        let circuit_start = imm_idx + 1;
-        let instr_start = circuit_start + NUM_CIRCUIT_FLAGS;
-        let lookup_start = instr_start + NUM_INSTRUCTION_FLAGS;
-        let raf_flag_idx = lookup_start + LookupTableKind::<XLEN>::COUNT;
+        let pc_idx = rd_start + REGISTER_COUNT;
+        let imm_idx = pc_idx + 1;
+        let flag_start = imm_idx + 1;
+        let lookup_start = flag_start + RowFlag::COUNT;
+        let raf_flag_idx = lookup_start + WasmTable::COUNT;
         Self {
             rs1_start,
             rs2_start,
             rd_start,
-            unexp_pc_idx,
+            pc_idx,
             imm_idx,
-            circuit_start,
-            instr_start,
+            flag_start,
             lookup_start,
             raf_flag_idx,
         }
@@ -432,36 +420,23 @@ pub fn lane_weights<F: JoltField>(
     {
         let coeff = eta_powers[0];
         let g = inputs.stage1_gammas;
-        weights[layout.unexp_pc_idx] += coeff * g[0];
-        weights[layout.imm_idx] += coeff * g[1];
-        for i in 0..NUM_CIRCUIT_FLAGS {
-            weights[layout.circuit_start + i] += coeff * g[2 + i];
+        weights[layout.imm_idx] += coeff * g[0];
+        for i in 0..RowFlag::COUNT {
+            weights[layout.flag_start + i] += coeff * g[1 + i];
         }
     }
     {
         let coeff = eta_powers[1];
         let g = inputs.stage2_gammas;
-        weights[layout.circuit_start + (CircuitFlags::Jump as usize)] += coeff * g[0];
-        weights[layout.instr_start + (InstructionFlags::Branch as usize)] += coeff * g[1];
-        weights[layout.circuit_start + (CircuitFlags::WriteLookupOutputToRD as usize)] +=
-            coeff * g[2];
-        weights[layout.circuit_start + (CircuitFlags::VirtualInstruction as usize)] += coeff * g[3];
+        weights[layout.flag_start + RowFlag::Branch.bit() as usize] += coeff * g[0];
     }
     {
         let coeff = eta_powers[2];
         let g = inputs.stage3_gammas;
         weights[layout.imm_idx] += coeff * g[0];
-        weights[layout.unexp_pc_idx] += coeff * g[1];
-        weights[layout.instr_start + (InstructionFlags::LeftOperandIsRs1Value as usize)] +=
-            coeff * g[2];
-        weights[layout.instr_start + (InstructionFlags::LeftOperandIsPC as usize)] += coeff * g[3];
-        weights[layout.instr_start + (InstructionFlags::RightOperandIsRs2Value as usize)] +=
-            coeff * g[4];
-        weights[layout.instr_start + (InstructionFlags::RightOperandIsImm as usize)] +=
-            coeff * g[5];
-        weights[layout.instr_start + (InstructionFlags::IsNoop as usize)] += coeff * g[6];
-        weights[layout.circuit_start + (CircuitFlags::VirtualInstruction as usize)] += coeff * g[7];
-        weights[layout.circuit_start + (CircuitFlags::IsFirstInSequence as usize)] += coeff * g[8];
+        weights[layout.flag_start + RowFlag::LeftIsRs1.bit() as usize] += coeff * g[1];
+        weights[layout.flag_start + RowFlag::RightIsRs2.bit() as usize] += coeff * g[2];
+        weights[layout.flag_start + RowFlag::RightIsImm.bit() as usize] += coeff * g[3];
     }
     {
         let coeff = eta_powers[3];
@@ -479,19 +454,9 @@ pub fn lane_weights<F: JoltField>(
             weights[layout.rd_start + r] += coeff * g[0] * register_val_evaluation_eq[r];
         }
         weights[layout.raf_flag_idx] += coeff * g[1];
-        for i in 0..LookupTableKind::<XLEN>::COUNT {
+        for i in 0..WasmTable::COUNT {
             weights[layout.lookup_start + i] += coeff * g[2 + i];
         }
-    }
-    // The lattice store stage: one raw circuit-flag lane at η^5, no gamma fold
-    // (mirrors the read-raf sixth staged val, which consumes the
-    // `IncVirtualization` store selector claim directly). Anchored on the fixed
-    // base count so it lands at η^5 while `eta_powers` is sized by the active
-    // (cfg'd) `NUM_BYTECODE_VAL_STAGES` (= 6 here).
-    #[cfg(feature = "akita")]
-    {
-        weights[layout.circuit_start + (CircuitFlags::Store as usize)] +=
-            eta_powers[BYTECODE_STAGE_GAMMA_COUNTS.len()];
     }
 
     Ok(weights)
@@ -563,20 +528,7 @@ mod tests {
     use super::*;
     use crate::protocols::jolt::JoltPolynomialId;
     use jolt_field::{Field, Fr, Ring};
-    use jolt_lookup_tables::InstructionLookupTable;
-    use jolt_riscv::{
-        instructions::Noop, Flags, InterleavedBitsMarker, JoltInstruction, JoltInstructionKind,
-        JoltInstructionRow, NormalizedOperands, CIRCUIT_FLAGS,
-    };
-
-    const INSTRUCTION_FLAG_ORDER: [InstructionFlags; NUM_INSTRUCTION_FLAGS] = [
-        InstructionFlags::LeftOperandIsPC,
-        InstructionFlags::RightOperandIsImm,
-        InstructionFlags::LeftOperandIsRs1Value,
-        InstructionFlags::RightOperandIsRs2Value,
-        InstructionFlags::Branch,
-        InstructionFlags::IsNoop,
-    ];
+    use jolt_wasm_ir::{AluOp, BytecodeRow, Ir, Operand, Reg, Width, REGISTER_NONE};
 
     fn fr(value: u64) -> Fr {
         Fr::from_u64(value)
@@ -595,63 +547,45 @@ mod tests {
 
     /// Sparse `(lane, value)` encoding of one committed bytecode row, mirroring
     /// core's `for_each_active_lane_value`.
-    fn lane_values(instruction: &JoltInstructionRow) -> Vec<(usize, Fr)> {
-        let decoded = JoltInstruction::try_from(*instruction)
-            .unwrap_or(JoltInstruction::Noop(Noop(*instruction)));
-        let circuit_flags = decoded.circuit_flags();
-        let instruction_flags = decoded.instruction_flags();
+    fn lane_values(row: &BytecodeRow) -> Vec<(usize, Fr)> {
         let layout = BYTECODE_LANE_LAYOUT;
         let mut values = Vec::new();
 
-        if let Some(register) = instruction.operands.rs1 {
-            values.push((layout.rs1_start + register as usize, fr(1)));
+        if row.rs1 != REGISTER_NONE {
+            values.push((layout.rs1_start + usize::from(row.rs1), fr(1)));
         }
-        if let Some(register) = instruction.operands.rs2 {
-            values.push((layout.rs2_start + register as usize, fr(1)));
+        if row.rs2 != REGISTER_NONE {
+            values.push((layout.rs2_start + usize::from(row.rs2), fr(1)));
         }
-        if let Some(register) = instruction.operands.rd {
-            values.push((layout.rd_start + register as usize, fr(1)));
+        if row.rd != REGISTER_NONE {
+            values.push((layout.rd_start + usize::from(row.rd), fr(1)));
         }
-        values.push((layout.unexp_pc_idx, fr(instruction.address as u64)));
-        values.push((layout.imm_idx, Fr::from_i128(instruction.operands.imm)));
-        for (index, flag) in CIRCUIT_FLAGS.into_iter().enumerate() {
-            assert_eq!(index, flag as usize);
-            if circuit_flags[flag] {
-                values.push((layout.circuit_start + index, fr(1)));
+        values.push((layout.imm_idx, Fr::from_i128(row.imm_signed())));
+        for (index, flag) in RowFlag::ALL.into_iter().enumerate() {
+            assert_eq!(index, flag.bit() as usize);
+            if row.flags.has(flag) {
+                values.push((layout.flag_start + index, fr(1)));
             }
         }
-        for (index, flag) in INSTRUCTION_FLAG_ORDER.into_iter().enumerate() {
-            assert_eq!(index, flag as usize);
-            if instruction_flags[flag] {
-                values.push((layout.instr_start + index, fr(1)));
-            }
+        if let Some(op) = row.table_op() {
+            values.push((layout.lookup_start + WasmTable::of(op).index(), fr(1)));
         }
-        if let Some(table) = InstructionLookupTable::<XLEN>::lookup_table(&decoded) {
-            values.push((layout.lookup_start + table.index(), fr(1)));
-        }
-        if !circuit_flags.is_interleaved_operands() {
+        if row.raf_flag() {
             values.push((layout.raf_flag_idx, fr(1)));
         }
 
         values
     }
 
-    fn test_bytecode() -> Vec<JoltInstructionRow> {
+    fn test_bytecode() -> Vec<BytecodeRow> {
         vec![
-            JoltInstructionRow {
-                instruction_kind: JoltInstructionKind::ADD,
-                address: 9,
-                operands: NormalizedOperands {
-                    rs1: Some(3),
-                    rs2: Some(5),
-                    rd: Some(7),
-                    imm: 4,
-                },
-                virtual_sequence_remaining: None,
-                is_first_in_sequence: false,
-                is_compressed: false,
-            },
-            JoltInstructionRow::default(),
+            BytecodeRow::of(Ir::alu(
+                AluOp::Add(Width::W64),
+                Reg::T3,
+                Reg::T0,
+                Operand::Imm(4),
+            )),
+            BytecodeRow::of(Ir::Halt),
         ]
     }
 
@@ -662,18 +596,11 @@ mod tests {
 
         assert_eq!(layout.rs2_start, layout.rs1_start + register_count);
         assert_eq!(layout.rd_start, layout.rs2_start + register_count);
-        assert_eq!(layout.unexp_pc_idx, layout.rd_start + register_count);
-        assert_eq!(layout.imm_idx, layout.unexp_pc_idx + 1);
-        assert_eq!(layout.circuit_start, layout.imm_idx + 1);
-        assert_eq!(layout.instr_start, layout.circuit_start + NUM_CIRCUIT_FLAGS);
-        assert_eq!(
-            layout.lookup_start,
-            layout.instr_start + NUM_INSTRUCTION_FLAGS
-        );
-        assert_eq!(
-            layout.raf_flag_idx,
-            layout.lookup_start + LookupTableKind::<XLEN>::COUNT
-        );
+        assert_eq!(layout.pc_idx, layout.rd_start + register_count);
+        assert_eq!(layout.imm_idx, layout.pc_idx + 1);
+        assert_eq!(layout.flag_start, layout.imm_idx + 1);
+        assert_eq!(layout.lookup_start, layout.flag_start + RowFlag::COUNT);
+        assert_eq!(layout.raf_flag_idx, layout.lookup_start + WasmTable::COUNT);
         assert_eq!(layout.raf_flag_idx + 1, total_lanes());
 
         assert!(COMMITTED_BYTECODE_LANE_CAPACITY.is_power_of_two());
@@ -714,11 +641,11 @@ mod tests {
         let register_val_evaluation_point: Vec<Fr> =
             (11..11 + REGISTER_ADDRESS_BITS as u64).map(fr).collect();
         let eta = fr(31);
-        let stage1_gammas = gamma_powers(3, 2 + NUM_CIRCUIT_FLAGS);
-        let stage2_gammas = gamma_powers(5, 4);
-        let stage3_gammas = gamma_powers(7, 9);
-        let stage4_gammas = gamma_powers(11, 3);
-        let stage5_gammas = gamma_powers(13, 2 + LookupTableKind::<XLEN>::COUNT);
+        let stage1_gammas = gamma_powers(3, BYTECODE_STAGE_GAMMA_COUNTS[0]);
+        let stage2_gammas = gamma_powers(5, BYTECODE_STAGE_GAMMA_COUNTS[1]);
+        let stage3_gammas = gamma_powers(7, BYTECODE_STAGE_GAMMA_COUNTS[2]);
+        let stage4_gammas = gamma_powers(11, BYTECODE_STAGE_GAMMA_COUNTS[3]);
+        let stage5_gammas = gamma_powers(13, BYTECODE_STAGE_GAMMA_COUNTS[4]);
 
         let public_values = read_raf_public_values::<Fr>(BytecodeReadRafEvaluationInputs {
             bytecode: &bytecode,
@@ -777,15 +704,15 @@ mod tests {
 
     #[test]
     fn lane_weights_reject_short_inputs() {
-        let stage1_gammas = gamma_powers(3, 2 + NUM_CIRCUIT_FLAGS);
-        let stage5_gammas = gamma_powers(13, 2 + LookupTableKind::<XLEN>::COUNT);
+        let stage1_gammas = gamma_powers(3, BYTECODE_STAGE_GAMMA_COUNTS[0]);
+        let stage5_gammas = gamma_powers(13, BYTECODE_STAGE_GAMMA_COUNTS[4]);
         let register_point: Vec<Fr> = (1..=REGISTER_ADDRESS_BITS as u64).map(fr).collect();
 
         let result = lane_weights::<Fr>(BytecodeLaneWeightInputs {
             eta: fr(31),
             stage1_gammas: &stage1_gammas,
-            stage2_gammas: &[fr(1); 4],
-            stage3_gammas: &[fr(1); 9],
+            stage2_gammas: &[fr(1); 1],
+            stage3_gammas: &[fr(1); 4],
             stage4_gammas: &[fr(1); 3],
             stage5_gammas: &stage5_gammas,
             register_read_write_point: &register_point[..REGISTER_ADDRESS_BITS - 1],

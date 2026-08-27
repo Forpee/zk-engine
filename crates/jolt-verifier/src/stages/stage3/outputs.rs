@@ -39,7 +39,7 @@ pub struct Stage3Sumchecks<F: JoltField> {
 impl<F: JoltField> Stage3OutputPoints<F> {
     /// The shift relation's shared opening point (every shift output carries it).
     pub fn shift_opening_point(&self) -> &[F] {
-        self.shift.unexpanded_pc()
+        self.shift.pc()
     }
 }
 
@@ -126,27 +126,19 @@ mod tests {
     /// the aliased cells with sentinels to prove they are skipped.
     fn consistent() -> Stage3OutputClaims<Fr> {
         Stage3OutputClaims::<Fr> {
-            shift: SpartanShiftOutputClaims {
-                unexpanded_pc: fr(1),
-                pc: fr(2),
-                is_virtual: fr(3),
-                is_first_in_sequence: fr(4),
-                is_noop: fr(5),
-            },
+            shift: SpartanShiftOutputClaims { pc: fr(1) },
             instruction_input: InstructionInputOutputClaims {
-                left_operand_is_rs1: fr(6),
-                rs1_value: fr(7),
-                left_operand_is_pc: fr(8),
-                unexpanded_pc: fr(1),
-                right_operand_is_rs2: fr(9),
-                rs2_value: fr(10),
-                right_operand_is_imm: fr(11),
-                imm: fr(12),
+                left_operand_is_rs1: fr(2),
+                rs1_value: fr(3),
+                right_operand_is_rs2: fr(4),
+                rs2_value: fr(5),
+                right_operand_is_imm: fr(6),
+                imm: fr(7),
             },
             registers_claim_reduction: RegistersClaimReductionOutputClaims {
-                rd_write_value: fr(13),
-                rs1_value: fr(7),
-                rs2_value: fr(10),
+                rd_write_value: fr(8),
+                rs1_value: fr(3),
+                rs2_value: fr(5),
             },
         }
     }
@@ -159,13 +151,12 @@ mod tests {
     #[test]
     fn opening_values_follow_canonical_order() {
         let mut claims = consistent();
-        claims.instruction_input.unexpanded_pc = fr(101);
         claims.registers_claim_reduction.rs1_value = fr(102);
         claims.registers_claim_reduction.rs2_value = fr(103);
 
         assert_eq!(
             sumchecks().opening_values(&claims),
-            (1..=13).map(fr).collect::<Vec<_>>()
+            (1..=8).map(fr).collect::<Vec<_>>()
         );
     }
 
@@ -174,7 +165,7 @@ mod tests {
     #[test]
     fn output_claim_count_matches_absorbed_openings() {
         let sumchecks = sumchecks();
-        assert_eq!(sumchecks.output_claim_count(), 13);
+        assert_eq!(sumchecks.output_claim_count(), 8);
         assert_eq!(
             sumchecks.opening_values(&consistent()).len(),
             sumchecks.output_claim_count(),
@@ -193,25 +184,7 @@ mod tests {
         use std::collections::BTreeSet;
 
         let sumchecks = sumchecks();
-        let shift_wire = sumchecks.shift.wire_output_openings();
         let instruction_wire = sumchecks.instruction_input.wire_output_openings();
-
-        let instruction_pairs = InstructionInput::<Fr>::aliased_output_openings();
-        assert_eq!(instruction_pairs.len(), 1);
-        let instruction_expression = sumchecks
-            .instruction_input
-            .symbolic()
-            .expected_output_openings::<Fr>();
-        for (aliased, source) in &instruction_pairs {
-            assert!(
-                instruction_expression.contains(aliased),
-                "aliased opening {aliased:?} is not referenced by the instruction-input Expr",
-            );
-            assert!(
-                shift_wire.contains(source),
-                "source {source:?} is not absorbed by the shift",
-            );
-        }
 
         let register_pairs = RegistersClaimReduction::<Fr>::aliased_output_openings();
         assert_eq!(register_pairs.len(), 2);
@@ -231,7 +204,7 @@ mod tests {
         }
 
         let mut seen = BTreeSet::new();
-        for (aliased, _) in instruction_pairs.iter().chain(&register_pairs) {
+        for (aliased, _) in &register_pairs {
             assert!(
                 seen.insert(*aliased),
                 "duplicate aliased opening {aliased:?}"
@@ -242,13 +215,6 @@ mod tests {
     #[test]
     fn validate_aliases_accepts_consistent_aliases() {
         assert!(sumchecks().validate_aliases(&consistent()).is_ok());
-    }
-
-    #[test]
-    fn validate_aliases_rejects_unexpanded_pc_mismatch() {
-        let mut claims = consistent();
-        claims.instruction_input.unexpanded_pc = fr(99);
-        assert!(sumchecks().validate_aliases(&claims).is_err());
     }
 
     #[test]
@@ -293,16 +259,12 @@ mod tests {
 
         let point: Vec<Fr> = (0..shift.rounds() as u64).map(|i| fr(20 + i)).collect();
         let input_points = sumchecks.empty_input_points();
-        let shift_points = shift
-            .derive_opening_points(&point, &input_points.shift)
-            .unwrap();
         let instruction_points = instruction_input
             .derive_opening_points(&point, &input_points.instruction_input)
             .unwrap();
         let register_points = registers
             .derive_opening_points(&point, &input_points.registers_claim_reduction)
             .unwrap();
-        assert_eq!(shift_points.unexpanded_pc, instruction_points.unexpanded_pc);
         assert_eq!(instruction_points.rs1_value, register_points.rs1_value);
         assert_eq!(instruction_points.rs2_value, register_points.rs2_value);
     }

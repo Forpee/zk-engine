@@ -1,13 +1,13 @@
 //! Spartan product remainder symbolic sumcheck relation.
 
 use jolt_field::Ring;
-use jolt_riscv::{CircuitFlags, InstructionFlags};
+use jolt_wasm_ir::RowFlag;
 use serde::{Deserialize, Serialize};
 
 use crate::protocols::jolt::geometry::spartan::{
-    branch_flag_product, jump_flag_product, left_instruction_input_product, lookup_output_product,
-    next_is_noop_product, product_tau_kernel, product_uniskip_opening, product_weight,
-    right_instruction_input_product, SpartanProductDimensions, PRODUCT_REMAINDER_DEGREE,
+    branch_flag_product, left_instruction_input_product, lookup_output_product, product_tau_kernel,
+    product_uniskip_opening, product_weight, right_instruction_input_product,
+    SpartanProductDimensions, PRODUCT_REMAINDER_DEGREE,
 };
 use crate::protocols::jolt::{
     JoltChallengeId, JoltDerivedId, JoltExpr, JoltOpeningId, JoltRelationId,
@@ -31,18 +31,10 @@ pub struct ProductRemainderOutputClaims<C> {
     pub left_instruction_input: C,
     #[opening(RightInstructionInput)]
     pub right_instruction_input: C,
-    #[opening(OpFlags(CircuitFlags::Jump))]
-    pub jump_flag: C,
-    #[opening(OpFlags(CircuitFlags::WriteLookupOutputToRD))]
-    pub write_lookup_output_to_rd: C,
     #[opening(LookupOutput)]
     pub lookup_output: C,
-    #[opening(InstructionFlags(InstructionFlags::Branch))]
+    #[opening(RowFlag(RowFlag::Branch))]
     pub branch_flag: C,
-    #[opening(NextIsNoop)]
-    pub next_is_noop: C,
-    #[opening(OpFlags(CircuitFlags::VirtualInstruction))]
-    pub virtual_instruction: C,
 }
 
 /// Consumed product-remainder input: the product uni-skip's reduced opening. The
@@ -92,12 +84,11 @@ impl SymbolicSumcheck for ProductRemainder {
     }
 
     fn output_expression<F: Ring>(&self) -> JoltExpr<F> {
+        // Two lanes: `Product = Left · Right` and `ShouldBranch = LookupOutput · Branch`.
         let left = product_weight(0) * opening(left_instruction_input_product())
-            + product_weight(1) * opening(lookup_output_product())
-            + product_weight(2) * opening(jump_flag_product());
+            + product_weight(1) * opening(lookup_output_product());
         let right = product_weight(0) * opening(right_instruction_input_product())
-            + product_weight(1) * opening(branch_flag_product())
-            + product_weight(2) * (JoltExpr::one() - opening(next_is_noop_product()));
+            + product_weight(1) * opening(branch_flag_product());
 
         product_tau_kernel() * left * right
     }
@@ -115,11 +106,9 @@ mod tests {
 
         let left_input = Fr::from_u64(2);
         let lookup_output = Fr::from_u64(3);
-        let jump = Fr::from_u64(5);
         let right_input = Fr::from_u64(7);
         let branch = Fr::from_u64(11);
-        let next_is_noop = Fr::from_u64(13);
-        let weights = [Fr::from_u64(17), Fr::from_u64(19), Fr::from_u64(23)];
+        let weights = [Fr::from_u64(17), Fr::from_u64(19)];
         let tau_kernel = Fr::from_u64(29);
         let zero = Fr::from_u64(0);
 
@@ -127,10 +116,8 @@ mod tests {
             |id| match *id {
                 id if id == left_instruction_input_product() => left_input,
                 id if id == lookup_output_product() => lookup_output,
-                id if id == jump_flag_product() => jump,
                 id if id == right_instruction_input_product() => right_input,
                 id if id == branch_flag_product() => branch,
-                id if id == next_is_noop_product() => next_is_noop,
                 _ => zero,
             },
             |_| zero,
@@ -148,10 +135,8 @@ mod tests {
         assert_eq!(
             output,
             tau_kernel
-                * (weights[0] * left_input + weights[1] * lookup_output + weights[2] * jump)
-                * (weights[0] * right_input
-                    + weights[1] * branch
-                    + weights[2] * (Fr::from_u64(1) - next_is_noop))
+                * (weights[0] * left_input + weights[1] * lookup_output)
+                * (weights[0] * right_input + weights[1] * branch)
         );
     }
 }

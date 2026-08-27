@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::VerifierError;
 
+/// Pedersen generator capacity BlindFold needs from the vector commitment.
+pub const MAX_BLINDFOLD_GENERATORS: usize = 32;
+
 #[cfg(all(feature = "zk", feature = "akita"))]
 compile_error!(
     "the `zk` and `akita` features are mutually exclusive: no zk protocol exists over the \

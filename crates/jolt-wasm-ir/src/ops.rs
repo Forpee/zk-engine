@@ -1,7 +1,11 @@
 //! Operand widths shared by the source and lowered universes.
 
 /// Operand width of an integer operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub enum Width {
     W32,
     W64,

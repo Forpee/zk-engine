@@ -1,7 +1,7 @@
 //! Spartan outer remainder symbolic sumcheck relation.
 
 use jolt_field::Ring;
-use jolt_riscv::CircuitFlags;
+use jolt_wasm_ir::RowFlag;
 use serde::{Deserialize, Serialize};
 
 use crate::protocols::jolt::geometry::spartan::{
@@ -41,12 +41,8 @@ pub struct OuterRemainderOutputClaims<C> {
     pub right_instruction_input: C,
     #[opening(Product)]
     pub product: C,
-    #[opening(ShouldBranch)]
-    pub should_branch: C,
     #[opening(PC)]
     pub pc: C,
-    #[opening(UnexpandedPC)]
-    pub unexpanded_pc: C,
     #[opening(Imm)]
     pub imm: C,
     #[opening(RamAddress)]
@@ -65,46 +61,42 @@ pub struct OuterRemainderOutputClaims<C> {
     pub left_lookup_operand: C,
     #[opening(RightLookupOperand)]
     pub right_lookup_operand: C,
-    #[opening(NextUnexpandedPC)]
-    pub next_unexpanded_pc: C,
     #[opening(NextPC)]
     pub next_pc: C,
-    #[opening(NextIsVirtual)]
-    pub next_is_virtual: C,
-    #[opening(NextIsFirstInSequence)]
-    pub next_is_first_in_sequence: C,
     #[opening(LookupOutput)]
     pub lookup_output: C,
-    #[opening(ShouldJump)]
-    pub should_jump: C,
-    #[opening(OpFlags(CircuitFlags::AddOperands))]
+    #[opening(ShouldBranch)]
+    pub should_branch: C,
+    #[opening(RowFlag(RowFlag::LeftIsRs1))]
+    pub left_is_rs1: C,
+    #[opening(RowFlag(RowFlag::RightIsRs2))]
+    pub right_is_rs2: C,
+    #[opening(RowFlag(RowFlag::RightIsImm))]
+    pub right_is_imm: C,
+    #[opening(RowFlag(RowFlag::AddOperands))]
     pub add_operands: C,
-    #[opening(OpFlags(CircuitFlags::SubtractOperands))]
-    pub subtract_operands: C,
-    #[opening(OpFlags(CircuitFlags::MultiplyOperands))]
-    pub multiply_operands: C,
-    #[opening(OpFlags(CircuitFlags::Load))]
+    #[opening(RowFlag(RowFlag::SubOperands))]
+    pub sub_operands: C,
+    #[opening(RowFlag(RowFlag::MulOperands))]
+    pub mul_operands: C,
+    #[opening(RowFlag(RowFlag::WriteLookupToRd))]
+    pub write_lookup_to_rd: C,
+    #[opening(RowFlag(RowFlag::Load))]
     pub load: C,
-    #[opening(OpFlags(CircuitFlags::Store))]
+    #[opening(RowFlag(RowFlag::Store))]
     pub store: C,
-    #[opening(OpFlags(CircuitFlags::Jump))]
+    #[opening(RowFlag(RowFlag::Jump))]
     pub jump: C,
-    #[opening(OpFlags(CircuitFlags::WriteLookupOutputToRD))]
-    pub write_lookup_output_to_rd: C,
-    #[opening(OpFlags(CircuitFlags::VirtualInstruction))]
-    pub virtual_instruction: C,
-    #[opening(OpFlags(CircuitFlags::Assert))]
+    #[opening(RowFlag(RowFlag::Branch))]
+    pub branch: C,
+    #[opening(RowFlag(RowFlag::Assert))]
     pub assert: C,
-    #[opening(OpFlags(CircuitFlags::DoNotUpdateUnexpandedPC))]
-    pub do_not_update_unexpanded_pc: C,
-    #[opening(OpFlags(CircuitFlags::Advice))]
+    #[opening(RowFlag(RowFlag::Halt))]
+    pub halt: C,
+    #[opening(RowFlag(RowFlag::Trap))]
+    pub trap: C,
+    #[opening(RowFlag(RowFlag::Advice))]
     pub advice: C,
-    #[opening(OpFlags(CircuitFlags::IsCompressed))]
-    pub is_compressed: C,
-    #[opening(OpFlags(CircuitFlags::IsFirstInSequence))]
-    pub is_first_in_sequence: C,
-    #[opening(OpFlags(CircuitFlags::IsLastInSequence))]
-    pub is_last_in_sequence: C,
 }
 
 /// The Spartan outer remainder sumcheck: the quadratic R1CS form over the outer
@@ -172,7 +164,6 @@ mod tests {
     use super::*;
     use crate::protocols::jolt::JoltVirtualPolynomial;
     use jolt_field::{Fr, Ring};
-    use jolt_riscv::CIRCUIT_FLAGS;
 
     /// The expanded `output_expression` reproduces the factored quadratic form
     /// `tau_kernel * (Σ az[i] o[i] + az_c) * (Σ bz[i] o[i] + bz_c)` when fed the
@@ -224,18 +215,18 @@ mod tests {
         assert_eq!(output, tau_kernel * az_form * bz_form);
     }
 
-    /// Pins the circuit-flag coverage of the outer-remainder output claims: every
-    /// `CircuitFlags` variant has a field (a newly added flag missing its field
-    /// would leave an R1CS input opening unresolvable — and desynchronize the
-    /// canonical `SPARTAN_OUTER_R1CS_INPUTS` append order this struct encodes).
+    /// Pins the row-flag coverage of the outer-remainder output claims: every
+    /// `RowFlag` has a field (a newly added flag missing its field would leave
+    /// an R1CS input opening unresolvable — and desynchronize the canonical
+    /// `SPARTAN_OUTER_R1CS_INPUTS` append order this struct encodes).
     #[test]
-    fn output_claims_cover_circuit_flags() {
+    fn output_claims_cover_row_flags() {
         let claims = OuterRemainderOutputClaims::<Fr>::default();
-        for flag in CIRCUIT_FLAGS {
-            let id = outer_opening(JoltVirtualPolynomial::OpFlags(flag));
+        for flag in RowFlag::ALL {
+            let id = outer_opening(JoltVirtualPolynomial::RowFlag(flag));
             assert!(
                 claims.resolve_output(&id).is_some(),
-                "missing outer-remainder output field for OpFlags({flag:?})",
+                "missing outer-remainder output field for RowFlag({flag:?})",
             );
         }
     }

@@ -12,10 +12,10 @@ use super::{
 };
 
 pub const REGISTER_ADDRESS_BITS: usize = 7;
-pub const OUTER_UNISKIP_DOMAIN_SIZE: usize = 10;
-pub const OUTER_UNISKIP_FIRST_ROUND_DEGREE: usize = 27;
-pub const PRODUCT_UNISKIP_DOMAIN_SIZE: usize = 3;
-pub const PRODUCT_UNISKIP_FIRST_ROUND_DEGREE: usize = 6;
+pub const OUTER_UNISKIP_DOMAIN_SIZE: usize = 11;
+pub const OUTER_UNISKIP_FIRST_ROUND_DEGREE: usize = 30;
+pub const PRODUCT_UNISKIP_DOMAIN_SIZE: usize = 2;
+pub const PRODUCT_UNISKIP_FIRST_ROUND_DEGREE: usize = 3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TracePolynomialOrder {

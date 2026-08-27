@@ -577,7 +577,7 @@ mod tests {
     };
     use jolt_claims_derive::{InputClaims, OutputClaims};
     use jolt_field::{Fr, Ring};
-    use jolt_riscv::CircuitFlags;
+    use jolt_wasm_ir::RowFlag;
 
     fn fr(value: u64) -> Fr {
         Fr::from_u64(value)
@@ -709,9 +709,9 @@ mod tests {
     #[derive(OutputClaims)]
     #[relation(SpartanShift)]
     struct PayloadLeaf<C> {
-        #[opening(UnexpandedPC)]
+        #[opening(PC)]
         unexpanded_pc: C,
-        #[opening(OpFlags(CircuitFlags::VirtualInstruction))]
+        #[opening(RowFlag(RowFlag::Jump))]
         is_virtual: C,
     }
 
@@ -726,12 +726,12 @@ mod tests {
         assert_eq!(claims.opening_values().len(), 2);
         assert_eq!(claims.opening_values(), vec![fr(1), fr(2)]);
         assert_eq!(
-            claims.resolve_output(&virt(JoltVirtualPolynomial::UnexpandedPC, relation)),
+            claims.resolve_output(&virt(JoltVirtualPolynomial::PC, relation)),
             Some(fr(1)),
         );
         assert_eq!(
             claims.resolve_output(&virt(
-                JoltVirtualPolynomial::OpFlags(CircuitFlags::VirtualInstruction),
+                JoltVirtualPolynomial::RowFlag(RowFlag::Jump),
                 relation,
             )),
             Some(fr(2)),
@@ -739,7 +739,7 @@ mod tests {
         // A different flag payload is a different opening and misses.
         assert_eq!(
             claims.resolve_output(&virt(
-                JoltVirtualPolynomial::OpFlags(CircuitFlags::IsFirstInSequence),
+                JoltVirtualPolynomial::RowFlag(RowFlag::Branch),
                 relation,
             )),
             None,

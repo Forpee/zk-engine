@@ -163,6 +163,16 @@ impl WasmTable {
         }
     }
 
+    /// Every table in id order.
+    pub fn iter() -> <Self as strum::IntoEnumIterator>::Iterator {
+        <Self as strum::IntoEnumIterator>::iter()
+    }
+
+    /// The table with append-only id `index`, if any.
+    pub fn from_index(index: usize) -> Option<Self> {
+        <Self as strum::IntoEnumIterator>::iter().nth(index)
+    }
+
     /// The variant's position in declaration order, suitable for array
     /// indexing (the append-only table id).
     #[inline]
@@ -202,15 +212,27 @@ impl WasmTable {
     }
 }
 
-/// The 128-bit lookup index of a row with instruction inputs `(left, right)`.
-pub fn lookup_index(op: AluOp, left: u64, right: u64) -> u128 {
+/// The 128-bit lookup index of a row with instruction inputs `(left, right)`
+/// under an operand mode.
+pub fn lookup_index_for(mode: OperandMode, left: u64, right: u64) -> u128 {
     let (x, y) = (u128::from(left), u128::from(right));
-    match op.operand_mode() {
+    match mode {
         OperandMode::Interleaved => interleave_bits(left, right),
         OperandMode::Add => x + y,
         OperandMode::Sub => x + (1u128 << 64) - y,
         OperandMode::Mul => x * y,
     }
+}
+
+/// The 128-bit lookup index of a row of `op` with instruction inputs
+/// `(left, right)`.
+pub fn lookup_index(op: AluOp, left: u64, right: u64) -> u128 {
+    lookup_index_for(op.operand_mode(), left, right)
+}
+
+/// The catalog table id a bytecode row commits to, if it looks one up.
+pub fn bytecode_table_id(row: &jolt_wasm_ir::BytecodeRow) -> Option<usize> {
+    row.table_op().map(|op| WasmTable::of(op).index())
 }
 
 /// `materialize_entry` of `op`'s table at the row's lookup index.

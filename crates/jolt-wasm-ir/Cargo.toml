@@ -11,4 +11,10 @@ categories = ["cryptography"]
 [lints]
 workspace = true
 
+[features]
+default = []
+serialization = ["dep:serde"]
+
 [dependencies]
+serde = { workspace = true, optional = true, features = ["derive"] }
+thiserror = { workspace = true }

@@ -214,9 +214,7 @@ impl<F: JoltField> ConcreteSumcheck<F> for OuterRemainder<F> {
             left_instruction_input: opening_point.clone(),
             right_instruction_input: opening_point.clone(),
             product: opening_point.clone(),
-            should_branch: opening_point.clone(),
             pc: opening_point.clone(),
-            unexpanded_pc: opening_point.clone(),
             imm: opening_point.clone(),
             ram_address: opening_point.clone(),
             rs1_value: opening_point.clone(),
@@ -226,26 +224,24 @@ impl<F: JoltField> ConcreteSumcheck<F> for OuterRemainder<F> {
             ram_write_value: opening_point.clone(),
             left_lookup_operand: opening_point.clone(),
             right_lookup_operand: opening_point.clone(),
-            next_unexpanded_pc: opening_point.clone(),
             next_pc: opening_point.clone(),
-            next_is_virtual: opening_point.clone(),
-            next_is_first_in_sequence: opening_point.clone(),
             lookup_output: opening_point.clone(),
-            should_jump: opening_point.clone(),
+            should_branch: opening_point.clone(),
+            left_is_rs1: opening_point.clone(),
+            right_is_rs2: opening_point.clone(),
+            right_is_imm: opening_point.clone(),
             add_operands: opening_point.clone(),
-            subtract_operands: opening_point.clone(),
-            multiply_operands: opening_point.clone(),
+            sub_operands: opening_point.clone(),
+            mul_operands: opening_point.clone(),
+            write_lookup_to_rd: opening_point.clone(),
             load: opening_point.clone(),
             store: opening_point.clone(),
             jump: opening_point.clone(),
-            write_lookup_output_to_rd: opening_point.clone(),
-            virtual_instruction: opening_point.clone(),
+            branch: opening_point.clone(),
             assert: opening_point.clone(),
-            do_not_update_unexpanded_pc: opening_point.clone(),
-            advice: opening_point.clone(),
-            is_compressed: opening_point.clone(),
-            is_first_in_sequence: opening_point.clone(),
-            is_last_in_sequence: opening_point,
+            halt: opening_point.clone(),
+            trap: opening_point.clone(),
+            advice: opening_point,
         })
     }
 
@@ -300,7 +296,7 @@ mod tests {
         assert_eq!(relation_form.canonical_order(), expected);
     }
 
-    /// Fill all 35 produced opening *values* with the given values (in canonical
+    /// Fill all 31 produced opening *values* with the given values (in canonical
     /// field / `SPARTAN_OUTER_R1CS_INPUTS` order).
     fn output_values_from(values: &[Fr]) -> OuterRemainderOutputClaims<Fr> {
         let mut iter = values.iter().copied();
@@ -309,9 +305,7 @@ mod tests {
             left_instruction_input: next(),
             right_instruction_input: next(),
             product: next(),
-            should_branch: next(),
             pc: next(),
-            unexpanded_pc: next(),
             imm: next(),
             ram_address: next(),
             rs1_value: next(),
@@ -321,39 +315,35 @@ mod tests {
             ram_write_value: next(),
             left_lookup_operand: next(),
             right_lookup_operand: next(),
-            next_unexpanded_pc: next(),
             next_pc: next(),
-            next_is_virtual: next(),
-            next_is_first_in_sequence: next(),
             lookup_output: next(),
-            should_jump: next(),
+            should_branch: next(),
+            left_is_rs1: next(),
+            right_is_rs2: next(),
+            right_is_imm: next(),
             add_operands: next(),
-            subtract_operands: next(),
-            multiply_operands: next(),
+            sub_operands: next(),
+            mul_operands: next(),
+            write_lookup_to_rd: next(),
             load: next(),
             store: next(),
             jump: next(),
-            write_lookup_output_to_rd: next(),
-            virtual_instruction: next(),
+            branch: next(),
             assert: next(),
-            do_not_update_unexpanded_pc: next(),
+            halt: next(),
+            trap: next(),
             advice: next(),
-            is_compressed: next(),
-            is_first_in_sequence: next(),
-            is_last_in_sequence: next(),
         }
     }
 
-    /// All 35 produced opening *points* sharing a single opening point.
+    /// All 31 produced opening *points* sharing a single opening point.
     fn output_points_at(point: &[Fr]) -> OuterRemainderOutputClaims<Vec<Fr>> {
         let next = || point.to_vec();
         OuterRemainderOutputClaims {
             left_instruction_input: next(),
             right_instruction_input: next(),
             product: next(),
-            should_branch: next(),
             pc: next(),
-            unexpanded_pc: next(),
             imm: next(),
             ram_address: next(),
             rs1_value: next(),
@@ -363,40 +353,38 @@ mod tests {
             ram_write_value: next(),
             left_lookup_operand: next(),
             right_lookup_operand: next(),
-            next_unexpanded_pc: next(),
             next_pc: next(),
-            next_is_virtual: next(),
-            next_is_first_in_sequence: next(),
             lookup_output: next(),
-            should_jump: next(),
+            should_branch: next(),
+            left_is_rs1: next(),
+            right_is_rs2: next(),
+            right_is_imm: next(),
             add_operands: next(),
-            subtract_operands: next(),
-            multiply_operands: next(),
+            sub_operands: next(),
+            mul_operands: next(),
+            write_lookup_to_rd: next(),
             load: next(),
             store: next(),
             jump: next(),
-            write_lookup_output_to_rd: next(),
-            virtual_instruction: next(),
+            branch: next(),
             assert: next(),
-            do_not_update_unexpanded_pc: next(),
+            halt: next(),
+            trap: next(),
             advice: next(),
-            is_compressed: next(),
-            is_first_in_sequence: next(),
-            is_last_in_sequence: next(),
         }
     }
 
     /// The relation's expanded `expected_output` evaluates bit-identically to the
     /// factored `JoltSpartanOuterRemainder::expected_output_claim` on the production
-    /// 35-variable rv64 shape. This is the equivalence the clear stage-1 path now
+    /// 31-variable WASM shape. This is the equivalence the clear stage-1 path now
     /// relies on (it switched from the factored matrix form to the expanded relation
     /// form); muldiv non-ZK is the end-to-end gate, this pins it at unit level.
     #[test]
-    fn expected_output_matches_factored_form_on_rv64_shape() {
+    fn expected_output_matches_factored_form_on_wasm_shape() {
         let log_t = 3usize;
-        let dimensions = SpartanOuterDimensions::rv64(log_t);
+        let dimensions = SpartanOuterDimensions::wasm(log_t);
         let variable_count = dimensions.variables().len();
-        assert_eq!(variable_count, 35);
+        assert_eq!(variable_count, 31);
 
         // `tau` has `log_t + 2` entries; the remainder challenge vector has
         // `1 + log_t` entries (so `tau.len() == remainder.len() + 1`).

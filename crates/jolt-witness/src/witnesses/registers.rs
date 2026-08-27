@@ -1,18 +1,17 @@
 use jolt_field::JoltField;
-use jolt_riscv::JoltTraceRow as TraceRow;
 
 use super::{Extract, ToField, WitnessEnv};
-use crate::WitnessError;
+use crate::{TraceRow, WitnessError};
 
-/// Value read from rs1; 0 when the instruction has no rs1 operand.
+/// Value read from rs1; 0 when the row has no rs1 operand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rs1Value(pub u64);
 
-/// Value read from rs2; 0 when the instruction has no rs2 operand.
+/// Value read from rs2; 0 when the row has no rs2 operand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rs2Value(pub u64);
 
-/// Value written to rd; 0 when the instruction has no rd operand.
+/// Value written to rd; 0 when the row has no rd operand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RdWriteValue(pub u64);
 

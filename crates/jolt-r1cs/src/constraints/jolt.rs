@@ -11,13 +11,13 @@ use thiserror::Error as ThisError;
 use crate::SparseRow;
 use crate::{ConstraintMatrices, ConstraintMatrixEvalError};
 
-use super::rv64;
+use super::wasm;
 
 #[cfg(feature = "field-inline")]
 use super::field_constraints;
 
 #[cfg(feature = "field-inline")]
-pub const FIELD_INLINE_COLUMN_BASE: usize = rv64::NUM_VARS_PER_CYCLE;
+pub const FIELD_INLINE_COLUMN_BASE: usize = wasm::NUM_VARS_PER_CYCLE;
 
 #[cfg(feature = "field-inline")]
 pub const FIELD_INLINE_REUSED_NONCONST_COLUMNS: usize = 3;
@@ -27,24 +27,24 @@ pub const FIELD_INLINE_APPENDED_COLUMNS: usize =
     field_constraints::NUM_VARS_PER_CYCLE - 1 - FIELD_INLINE_REUSED_NONCONST_COLUMNS;
 
 #[cfg(feature = "field-inline")]
-pub const NUM_VARS_PER_CYCLE: usize = rv64::NUM_VARS_PER_CYCLE + FIELD_INLINE_APPENDED_COLUMNS;
+pub const NUM_VARS_PER_CYCLE: usize = wasm::NUM_VARS_PER_CYCLE + FIELD_INLINE_APPENDED_COLUMNS;
 
 #[cfg(not(feature = "field-inline"))]
-pub const NUM_VARS_PER_CYCLE: usize = rv64::NUM_VARS_PER_CYCLE;
+pub const NUM_VARS_PER_CYCLE: usize = wasm::NUM_VARS_PER_CYCLE;
 
 #[cfg(feature = "field-inline")]
 pub const NUM_CONSTRAINTS_PER_CYCLE: usize =
-    rv64::NUM_CONSTRAINTS_PER_CYCLE + field_constraints::NUM_CONSTRAINTS_PER_CYCLE;
+    wasm::NUM_CONSTRAINTS_PER_CYCLE + field_constraints::NUM_CONSTRAINTS_PER_CYCLE;
 
 #[cfg(not(feature = "field-inline"))]
-pub const NUM_CONSTRAINTS_PER_CYCLE: usize = rv64::NUM_CONSTRAINTS_PER_CYCLE;
+pub const NUM_CONSTRAINTS_PER_CYCLE: usize = wasm::NUM_CONSTRAINTS_PER_CYCLE;
 
 #[cfg(feature = "field-inline")]
 pub const SPARTAN_OUTER_ROW_COUNT: usize =
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::NUM_EQ_CONSTRAINTS;
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::NUM_EQ_CONSTRAINTS;
 
 #[cfg(not(feature = "field-inline"))]
-pub const SPARTAN_OUTER_ROW_COUNT: usize = rv64::NUM_EQ_CONSTRAINTS;
+pub const SPARTAN_OUTER_ROW_COUNT: usize = wasm::NUM_EQ_CONSTRAINTS;
 
 pub const SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE: usize = SPARTAN_OUTER_ROW_COUNT.div_ceil(2);
 pub const SPARTAN_OUTER_UNISKIP_FIRST_ROUND_DEGREE: usize =
@@ -52,7 +52,7 @@ pub const SPARTAN_OUTER_UNISKIP_FIRST_ROUND_DEGREE: usize =
 pub const SPARTAN_OUTER_REMAINDER_DEGREE: usize = 3;
 pub const SPARTAN_OUTER_SECOND_GROUP_ROW_COUNT: usize =
     SPARTAN_OUTER_ROW_COUNT - SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE;
-pub const SPARTAN_PRODUCT_BASE_LANES: usize = 3;
+pub const SPARTAN_PRODUCT_BASE_LANES: usize = 2;
 
 #[cfg(feature = "field-inline")]
 pub const SPARTAN_PRODUCT_FIELD_INLINE_LANES: usize = field_constraints::NUM_PRODUCT_CONSTRAINTS;
@@ -67,7 +67,7 @@ pub const SPARTAN_PRODUCT_UNISKIP_FIRST_ROUND_DEGREE: usize =
 
 #[cfg(not(feature = "field-inline"))]
 pub const SPARTAN_OUTER_FIRST_GROUP_ROWS: [usize; SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE] =
-    [1, 2, 3, 4, 5, 6, 11, 14, 17, 18];
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 #[cfg(feature = "field-inline")]
 pub const SPARTAN_OUTER_FIRST_GROUP_ROWS: [usize; SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE] = [
@@ -81,15 +81,15 @@ pub const SPARTAN_OUTER_FIRST_GROUP_ROWS: [usize; SPARTAN_OUTER_UNISKIP_DOMAIN_S
     14,
     17,
     18,
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FADD,
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FSUB,
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FMUL,
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FINV,
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FADD,
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FSUB,
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FMUL,
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FINV,
 ];
 
 #[cfg(not(feature = "field-inline"))]
 pub const SPARTAN_OUTER_SECOND_GROUP_ROWS: [usize; SPARTAN_OUTER_SECOND_GROUP_ROW_COUNT] =
-    [0, 7, 8, 9, 10, 12, 13, 15, 16];
+    [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
 
 #[cfg(feature = "field-inline")]
 pub const SPARTAN_OUTER_SECOND_GROUP_ROWS: [usize; SPARTAN_OUTER_SECOND_GROUP_ROW_COUNT] = [
@@ -102,14 +102,14 @@ pub const SPARTAN_OUTER_SECOND_GROUP_ROWS: [usize; SPARTAN_OUTER_SECOND_GROUP_RO
     13,
     15,
     16,
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_ASSERT_EQ,
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_LOAD_FROM_X,
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_STORE_TO_X,
-    rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_LOAD_IMM,
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_ASSERT_EQ,
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_LOAD_FROM_X,
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_STORE_TO_X,
+    wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_LOAD_IMM,
 ];
 
 pub fn spartan_outer_constraints<F: JoltField>() -> ConstraintMatrices<F> {
-    let constraints = rv64::rv64_spartan_outer_constraints();
+    let constraints = wasm::wasm_spartan_outer_constraints();
     #[cfg(feature = "field-inline")]
     {
         append_field_inline_columns(
@@ -124,7 +124,7 @@ pub fn spartan_outer_constraints<F: JoltField>() -> ConstraintMatrices<F> {
 }
 
 pub fn trace_constraints<F: JoltField>() -> ConstraintMatrices<F> {
-    let constraints = rv64::rv64_trace_constraints();
+    let constraints = wasm::wasm_trace_constraints();
     #[cfg(feature = "field-inline")]
     {
         append_field_inline_columns(
@@ -170,8 +170,8 @@ pub fn spartan_outer_row_weights<F: JoltField>(
 }
 
 pub fn spartan_outer_opening_columns() -> Vec<usize> {
-    let columns = (0..rv64::NUM_R1CS_INPUTS)
-        .map(|index| rv64::V_LEFT_INSTRUCTION_INPUT + index)
+    let columns = (0..wasm::NUM_R1CS_INPUTS)
+        .map(|index| wasm::V_LEFT_INPUT + index)
         .collect::<Vec<_>>();
 
     #[cfg(feature = "field-inline")]
@@ -245,7 +245,7 @@ impl<F: JoltField> JoltSpartanOuterRemainder<F> {
         }
 
         let constant_contributions =
-            matrices.public_column_contributions(&row_weights, rv64::const_column(), F::one())?;
+            matrices.public_column_contributions(&row_weights, wasm::const_column(), F::one())?;
         if !constant_contributions.c.is_zero() {
             return Err(JoltSpartanOuterRemainderError::UnexpectedCContribution);
         }
@@ -422,40 +422,40 @@ mod tests {
 
     #[cfg(not(feature = "field-inline"))]
     #[test]
-    fn default_composed_constraints_match_rv64_shape() {
+    fn default_composed_constraints_match_wasm_shape() {
         let composed = trace_constraints::<Fr>();
-        let rv64 = rv64::rv64_trace_constraints::<Fr>();
+        let wasm = wasm::wasm_trace_constraints::<Fr>();
 
-        assert_eq!(composed.num_constraints, rv64.num_constraints);
-        assert_eq!(composed.num_vars, rv64.num_vars);
-        assert_eq!(composed.a, rv64.a);
-        assert_eq!(composed.b, rv64.b);
-        assert_eq!(composed.c, rv64.c);
+        assert_eq!(composed.num_constraints, wasm.num_constraints);
+        assert_eq!(composed.num_vars, wasm.num_vars);
+        assert_eq!(composed.a, wasm.a);
+        assert_eq!(composed.b, wasm.b);
+        assert_eq!(composed.c, wasm.c);
     }
 
     #[cfg(not(feature = "field-inline"))]
     #[test]
-    fn default_spartan_outer_geometry_matches_rv64() {
-        assert_eq!(SPARTAN_OUTER_ROW_COUNT, rv64::NUM_EQ_CONSTRAINTS);
-        assert_eq!(SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE, 10);
-        assert_eq!(SPARTAN_OUTER_UNISKIP_FIRST_ROUND_DEGREE, 27);
+    fn default_spartan_outer_geometry_matches_wasm() {
+        assert_eq!(SPARTAN_OUTER_ROW_COUNT, wasm::NUM_EQ_CONSTRAINTS);
+        assert_eq!(SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE, 11);
+        assert_eq!(SPARTAN_OUTER_UNISKIP_FIRST_ROUND_DEGREE, 30);
         assert_eq!(SPARTAN_OUTER_REMAINDER_DEGREE, 3);
         assert_eq!(
             SPARTAN_OUTER_FIRST_GROUP_ROWS,
-            [1, 2, 3, 4, 5, 6, 11, 14, 17, 18]
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
         assert_eq!(
             SPARTAN_OUTER_SECOND_GROUP_ROWS,
-            [0, 7, 8, 9, 10, 12, 13, 15, 16]
+            [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
         );
         assert_eq!(
             spartan_outer_row_weights(Fr::from_u64(2), Fr::from_u64(3))
                 .map(|weights| weights.len()),
-            Ok(rv64::NUM_EQ_CONSTRAINTS)
+            Ok(wasm::NUM_EQ_CONSTRAINTS)
         );
         assert_eq!(
             spartan_outer_opening_columns(),
-            (rv64::V_LEFT_INSTRUCTION_INPUT..=rv64::NUM_R1CS_INPUTS).collect::<Vec<_>>()
+            (wasm::V_LEFT_INPUT..=wasm::NUM_R1CS_INPUTS).collect::<Vec<_>>()
         );
     }
 
@@ -490,7 +490,7 @@ mod tests {
     fn field_inline_spartan_outer_geometry_includes_field_rows() {
         assert_eq!(
             SPARTAN_OUTER_ROW_COUNT,
-            rv64::NUM_EQ_CONSTRAINTS + field_constraints::NUM_EQ_CONSTRAINTS
+            wasm::NUM_EQ_CONSTRAINTS + field_constraints::NUM_EQ_CONSTRAINTS
         );
         assert_eq!(SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE, 14);
         assert_eq!(SPARTAN_OUTER_UNISKIP_FIRST_ROUND_DEGREE, 39);
@@ -498,19 +498,19 @@ mod tests {
         assert_eq!(
             &SPARTAN_OUTER_FIRST_GROUP_ROWS[10..],
             &[
-                rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FADD,
-                rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FSUB,
-                rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FMUL,
-                rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FINV,
+                wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FADD,
+                wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FSUB,
+                wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FMUL,
+                wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_FINV,
             ]
         );
         assert_eq!(
             &SPARTAN_OUTER_SECOND_GROUP_ROWS[9..],
             &[
-                rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_ASSERT_EQ,
-                rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_LOAD_FROM_X,
-                rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_STORE_TO_X,
-                rv64::NUM_EQ_CONSTRAINTS + field_constraints::ROW_LOAD_IMM,
+                wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_ASSERT_EQ,
+                wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_LOAD_FROM_X,
+                wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_STORE_TO_X,
+                wasm::NUM_EQ_CONSTRAINTS + field_constraints::ROW_LOAD_IMM,
             ]
         );
         assert_eq!(
@@ -569,7 +569,7 @@ mod tests {
             );
         }
         assert_eq!(
-            spartan_outer_opening_columns()[rv64::NUM_R1CS_INPUTS..],
+            spartan_outer_opening_columns()[wasm::NUM_R1CS_INPUTS..],
             (FIELD_INLINE_COLUMN_BASE..FIELD_INLINE_COLUMN_BASE + FIELD_INLINE_APPENDED_COLUMNS)
                 .collect::<Vec<_>>()
         );
@@ -607,7 +607,7 @@ mod tests {
             .expect("field-inline output claim evaluates");
         assert_eq!(
             opening_count,
-            rv64::NUM_R1CS_INPUTS + FIELD_INLINE_APPENDED_COLUMNS
+            wasm::NUM_R1CS_INPUTS + FIELD_INLINE_APPENDED_COLUMNS
         );
         // The factored publics: the tau kernel, one Az and one Bz weight per
         // opening (appended field-inline columns included), and the two

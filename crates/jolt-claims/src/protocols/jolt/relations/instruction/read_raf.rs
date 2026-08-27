@@ -1,7 +1,7 @@
 //! Instruction read-RAF symbolic sumcheck relation.
 
 use jolt_field::Ring;
-use jolt_lookup_tables::{LookupTableKind, XLEN};
+use jolt_wasm_tables::WasmTable;
 use serde::{Deserialize, Serialize};
 
 use crate::protocols::jolt::geometry::claim_reductions::instruction::{
@@ -98,7 +98,7 @@ impl SymbolicSumcheck for ReadRaf {
         let ra_product = instruction_ra_product(self.shape);
         let mut output = JoltExpr::zero();
 
-        for table in LookupTableKind::<XLEN>::iter() {
+        for table in WasmTable::iter() {
             output = output
                 + derived(eq_table_value(table))
                     * ra_product.clone()
@@ -141,10 +141,10 @@ mod tests {
         let gamma = Fr::from_u64(11);
         let ra_0 = Fr::from_u64(2);
         let ra_1 = Fr::from_u64(3);
-        let table_flags: Vec<_> = (0..LookupTableKind::<XLEN>::COUNT)
+        let table_flags: Vec<_> = (0..WasmTable::COUNT)
             .map(|i| Fr::from_u64(i as u64 + 5))
             .collect();
-        let table_values: Vec<_> = (0..LookupTableKind::<XLEN>::COUNT)
+        let table_values: Vec<_> = (0..WasmTable::COUNT)
             .map(|i| Fr::from_u64(2 * i as u64 + 13))
             .collect();
         let raf_constant = Fr::from_u64(23);

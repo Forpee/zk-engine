@@ -1,8 +1,8 @@
 use std::num::NonZeroUsize;
 
 use jolt_field::{JoltField, Ring};
-use jolt_lookup_tables::{LookupTableKind, XLEN};
-use jolt_riscv::InstructionFlags;
+use jolt_wasm_ir::RowFlag;
+use jolt_wasm_tables::WasmTable;
 
 use crate::opening;
 
@@ -324,9 +324,7 @@ pub fn read_raf_output_openings(
     dimensions: InstructionReadRafDimensions,
 ) -> InstructionReadRafOutputOpenings {
     InstructionReadRafOutputOpenings {
-        lookup_table_flags: LookupTableKind::<XLEN>::iter()
-            .map(lookup_table_flag)
-            .collect(),
+        lookup_table_flags: WasmTable::iter().map(lookup_table_flag).collect(),
         instruction_ra: (0..dimensions.num_virtual_ra_polys())
             .map(instruction_ra)
             .collect(),
@@ -370,7 +368,7 @@ pub fn ra_virtualization_output_openings(
     }
 }
 
-pub(crate) fn eq_table_value(table: LookupTableKind<XLEN>) -> InstructionReadRafPublic {
+pub(crate) fn eq_table_value(table: WasmTable) -> InstructionReadRafPublic {
     InstructionReadRafPublic::EqTableValue(table.index())
 }
 
@@ -428,7 +426,7 @@ pub fn committed_instruction_ra(index: usize) -> JoltOpeningId {
     )
 }
 
-pub fn lookup_table_flag(table: LookupTableKind<XLEN>) -> JoltOpeningId {
+pub fn lookup_table_flag(table: WasmTable) -> JoltOpeningId {
     JoltOpeningId::virtual_polynomial(
         JoltVirtualPolynomial::LookupTableFlag(table.index()),
         JoltRelationId::InstructionReadRaf,
@@ -442,11 +440,15 @@ pub fn instruction_raf_flag() -> JoltOpeningId {
     )
 }
 
-pub fn left_operand_is_rs1() -> JoltOpeningId {
+/// A row flag opened by the instruction-input virtualization relation.
+pub fn row_flag_input(flag: RowFlag) -> JoltOpeningId {
     JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::InstructionFlags(InstructionFlags::LeftOperandIsRs1Value),
+        JoltVirtualPolynomial::RowFlag(flag),
         JoltRelationId::InstructionInputVirtualization,
     )
+}
+pub fn left_operand_is_rs1() -> JoltOpeningId {
+    row_flag_input(RowFlag::LeftIsRs1)
 }
 
 pub fn rs1_value() -> JoltOpeningId {
@@ -456,25 +458,8 @@ pub fn rs1_value() -> JoltOpeningId {
     )
 }
 
-pub fn left_operand_is_pc() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::InstructionFlags(InstructionFlags::LeftOperandIsPC),
-        JoltRelationId::InstructionInputVirtualization,
-    )
-}
-
-pub fn unexpanded_pc() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::UnexpandedPC,
-        JoltRelationId::InstructionInputVirtualization,
-    )
-}
-
 pub fn right_operand_is_rs2() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::InstructionFlags(InstructionFlags::RightOperandIsRs2Value),
-        JoltRelationId::InstructionInputVirtualization,
-    )
+    row_flag_input(RowFlag::RightIsRs2)
 }
 
 pub fn rs2_value() -> JoltOpeningId {
@@ -485,10 +470,7 @@ pub fn rs2_value() -> JoltOpeningId {
 }
 
 pub fn right_operand_is_imm() -> JoltOpeningId {
-    JoltOpeningId::virtual_polynomial(
-        JoltVirtualPolynomial::InstructionFlags(InstructionFlags::RightOperandIsImm),
-        JoltRelationId::InstructionInputVirtualization,
-    )
+    row_flag_input(RowFlag::RightIsImm)
 }
 
 pub fn imm() -> JoltOpeningId {

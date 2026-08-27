@@ -138,7 +138,7 @@ fn every_row_of_a_real_trace_matches_its_table() {
         let Some(Lookup::Table(op)) = spec.lookup else {
             continue;
         };
-        let left = spec.left_input(record.rs1.map_or(0, |r| r.value), record.pc);
+        let left = spec.left_input(record.rs1.map_or(0, |r| r.value));
         let right = spec.right_input(record.rs2.map_or(0, |r| r.value));
         assert_eq!(
             table_output(op, left, right),

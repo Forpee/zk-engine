@@ -3,25 +3,20 @@
 //! RAM contract).
 
 use jolt_wasm_ir::layout::{
-    GLOBALS_BASE, LINEAR_MEMORY_BASE, PAGE_SIZE, SHADOW_STACK_BASE, SHADOW_STACK_SIZE, SYSTEM_BASE,
+    GLOBALS_BASE, GLOBALS_SIZE, INPUTS_BASE, INPUTS_SIZE, LINEAR_MEMORY_BASE, MEMORY_SIZE_ADDR,
+    OUTPUTS_BASE, OUTPUTS_SIZE, PAGE_SIZE, SHADOW_STACK_BASE, SHADOW_STACK_SIZE, SYSTEM_BASE,
     SYSTEM_SIZE, WORD_BYTES,
 };
 use jolt_wasm_ir::MemoryLimits;
 
 use crate::error::Trap;
 
-/// Result of [`Memory::grow`]: the size word's old and new values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Grown {
-    pub old_pages: u64,
-    pub old_bytes: u64,
-    pub new_bytes: u64,
-}
-
 #[derive(Debug, Clone)]
 pub struct Memory {
     shadow: Vec<u8>,
     system: Vec<u8>,
+    inputs: Vec<u8>,
+    outputs: Vec<u8>,
     globals: Vec<u8>,
     /// Linear memory plus one zeroed slack word past the end, so a
     /// non-crossing access to the last bytes can still read its `Hi` word.
@@ -31,16 +26,19 @@ pub struct Memory {
 
 impl Memory {
     pub fn new(limits: MemoryLimits, globals: &[u64]) -> Self {
-        let mut global_bytes = Vec::with_capacity(globals.len() * 8);
+        let mut global_bytes = Vec::with_capacity((GLOBALS_SIZE as usize).max(globals.len() * 8));
         for g in globals {
             global_bytes.extend_from_slice(&g.to_le_bytes());
         }
+        global_bytes.resize(GLOBALS_SIZE as usize, 0);
         let bytes = limits.initial_pages * PAGE_SIZE;
         let mut system = vec![0; SYSTEM_SIZE as usize];
         system[..8].copy_from_slice(&bytes.to_le_bytes());
         Self {
             shadow: vec![0; SHADOW_STACK_SIZE as usize],
             system,
+            inputs: vec![0; INPUTS_SIZE as usize],
+            outputs: vec![0; OUTPUTS_SIZE as usize],
             globals: global_bytes,
             linear: vec![0; (bytes + WORD_BYTES) as usize],
             max_pages: limits.max_pages,
@@ -58,23 +56,9 @@ impl Memory {
         self.size_bytes() / PAGE_SIZE
     }
 
-    /// Grow linear memory by `delta` pages and update the size word; `None`
-    /// if the cap would be exceeded.
-    pub fn grow(&mut self, delta: u64) -> Option<Grown> {
-        let old_pages = self.pages();
-        let new_pages = old_pages.checked_add(delta)?;
-        if new_pages > self.max_pages {
-            return None;
-        }
-        let old_bytes = old_pages * PAGE_SIZE;
-        let new_bytes = new_pages * PAGE_SIZE;
-        self.linear.resize((new_bytes + WORD_BYTES) as usize, 0);
-        self.system[..8].copy_from_slice(&new_bytes.to_le_bytes());
-        Some(Grown {
-            old_pages,
-            old_bytes,
-            new_bytes,
-        })
+    /// The page cap.
+    pub fn max_pages(&self) -> u64 {
+        self.max_pages
     }
 
     /// Non-zero linear-memory bytes as `(wasm offset, byte)` — the final
@@ -107,6 +91,8 @@ impl Memory {
         let buf = match region {
             Region::Shadow => &self.shadow,
             Region::System => &self.system,
+            Region::Inputs => &self.inputs,
+            Region::Outputs => &self.outputs,
             Region::Globals => &self.globals,
             Region::Linear => &self.linear,
         };
@@ -115,12 +101,16 @@ impl Memory {
         Ok(u64::from_le_bytes(word))
     }
 
-    /// Write one word; returns the previous value.
+    /// Write one word; returns the previous value. Writing the memory-size
+    /// word (the lowered `memory.grow`) resizes the linear backing store; the
+    /// lowering only writes sizes within the page cap.
     pub fn write_word(&mut self, address: u64, value: u64) -> Result<u64, Trap> {
         let (region, start) = self.locate(address)?;
         let buf = match region {
             Region::Shadow => &mut self.shadow,
             Region::System => &mut self.system,
+            Region::Inputs => &mut self.inputs,
+            Region::Outputs => &mut self.outputs,
             Region::Globals => &mut self.globals,
             Region::Linear => &mut self.linear,
         };
@@ -128,6 +118,10 @@ impl Memory {
         let mut word = [0u8; 8];
         word.copy_from_slice(slice);
         slice.copy_from_slice(&value.to_le_bytes());
+        if address == MEMORY_SIZE_ADDR {
+            let capped = value.min(self.max_pages * PAGE_SIZE);
+            self.linear.resize((capped + WORD_BYTES) as usize, 0);
+        }
         Ok(u64::from_le_bytes(word))
     }
 
@@ -138,10 +132,16 @@ impl Memory {
         let oob = || Trap::OutOfBoundsMemory { address, width: 8 };
         let (region, base, size) = if address >= LINEAR_MEMORY_BASE {
             (Region::Linear, LINEAR_MEMORY_BASE, self.linear.len())
-        } else if address >= SYSTEM_BASE {
-            (Region::System, SYSTEM_BASE, self.system.len())
         } else if address >= GLOBALS_BASE {
             (Region::Globals, GLOBALS_BASE, self.globals.len())
+        } else if address >= OUTPUTS_BASE {
+            (Region::Outputs, OUTPUTS_BASE, self.outputs.len())
+        } else if address >= INPUTS_BASE {
+            (Region::Inputs, INPUTS_BASE, self.inputs.len())
+        } else if address >= SYSTEM_BASE {
+            (Region::System, SYSTEM_BASE, self.system.len())
+        } else if address >= SHADOW_STACK_BASE + SHADOW_STACK_SIZE {
+            return Err(Trap::CallStackExhausted);
         } else if address >= SHADOW_STACK_BASE {
             (Region::Shadow, SHADOW_STACK_BASE, self.shadow.len())
         } else {
@@ -163,6 +163,8 @@ impl Memory {
 enum Region {
     Shadow,
     System,
+    Inputs,
+    Outputs,
     Globals,
     Linear,
 }

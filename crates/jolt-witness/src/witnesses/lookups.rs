@@ -1,21 +1,18 @@
 use jolt_field::JoltField;
-use jolt_lookup_tables::{InstructionLookupTable, LookupQuery};
-use jolt_riscv::{JoltInstruction, JoltTraceRow as TraceRow};
 
-use super::{decode_instruction, lookup_query, Extract, ToField, WitnessEnv};
-use crate::WitnessError;
-use crate::RV64_XLEN;
+use super::{Extract, ToField, WitnessEnv};
+use crate::{TraceRow, WitnessError};
 
-/// Output of the instruction's lookup query.
+/// Output of the row's lookup.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LookupOutput(pub u64);
 
-/// The instruction's 128-bit lookup index (its interleaved or concatenated
-/// lookup operands).
+/// The row's 128-bit lookup index (its interleaved or raw lookup operands);
+/// 0 for rows without a lookup.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LookupIndex(pub u128);
 
-/// Which lookup table the instruction's lookup targets, if any.
+/// Which catalog table the row's lookup targets, if any.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TableIndex(pub Option<usize>);
 
@@ -31,9 +28,7 @@ impl Extract for LookupOutput {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        Ok(Self(LookupQuery::<RV64_XLEN>::to_lookup_output(
-            &lookup_query(row),
-        )))
+        Ok(Self(row.lookup_output()))
     }
 }
 
@@ -49,9 +44,7 @@ impl Extract for LookupIndex {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        Ok(Self(LookupQuery::<RV64_XLEN>::to_lookup_index(
-            &lookup_query(row),
-        )))
+        Ok(Self(row.lookup_index().unwrap_or(0)))
     }
 }
 
@@ -61,10 +54,6 @@ impl Extract for TableIndex {
         _next: Option<&TraceRow>,
         _env: &WitnessEnv<'_>,
     ) -> Result<Self, WitnessError> {
-        let instruction = decode_instruction(row)?;
-        Ok(Self(
-            <JoltInstruction as InstructionLookupTable<RV64_XLEN>>::lookup_table(&instruction)
-                .map(|kind| kind.index()),
-        ))
+        Ok(Self(row.table()))
     }
 }

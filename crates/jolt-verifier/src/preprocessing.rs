@@ -1,19 +1,43 @@
 //! Verifier preprocessing inputs.
 
-use common::jolt_device::MemoryLayout;
 use jolt_claims::protocols::jolt::JoltRelationId;
 use jolt_crypto::VectorCommitment;
 use jolt_openings::CommitmentScheme;
-use jolt_program::preprocess::{JoltProgramPreprocessing, ProgramMetadata};
+use jolt_wasm_ir::{MemoryLimits, Pc};
+use jolt_wasm_program::{WasmProgramPreprocessing, PROGRAM_IMAGE_START_INDEX};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::VerifierError;
 
+/// The program facts a committed-program verifier binds without holding the
+/// bytecode table or program image.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramMetadata {
+    /// Padded bytecode table length (the bytecode address domain).
+    pub bytecode_len: usize,
+    /// Exported function name → entry-stub pc.
+    pub entries: BTreeMap<String, Pc>,
+    /// Dense program-image length in words from [`PROGRAM_IMAGE_START_INDEX`].
+    pub program_image_len_words: usize,
+    pub memory: MemoryLimits,
+}
+
+impl ProgramMetadata {
+    pub fn of(preprocessing: &WasmProgramPreprocessing) -> Self {
+        Self {
+            bytecode_len: preprocessing.bytecode.rows().len(),
+            entries: preprocessing.bytecode.entries().clone(),
+            program_image_len_words: preprocessing.program_image().words.len(),
+            memory: preprocessing.memory,
+        }
+    }
+}
+
 /// Committed-program verifier inputs: trusted bytecode-chunk and program-image
-/// commitments plus the program metadata they bind to. Mirrors `jolt-prover-legacy`'s
-/// `CommittedProgramPreprocessing`; the chunk count is implied by
-/// `bytecode_chunk_commitments.len()`.
+/// commitments plus the program metadata they bind to. The chunk count is
+/// implied by `bytecode_chunk_commitments.len()`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "PCS::Output: Serialize",
@@ -21,55 +45,34 @@ use crate::VerifierError;
 ))]
 pub struct CommittedProgramPreprocessing<PCS: CommitmentScheme> {
     pub meta: ProgramMetadata,
-    pub memory_layout: MemoryLayout,
-    pub max_padded_trace_length: usize,
-    #[cfg(not(feature = "akita"))]
+    pub max_trace_length: usize,
     pub bytecode_chunk_commitments: Vec<PCS::Output>,
-    #[cfg(not(feature = "akita"))]
     pub program_image_commitment: PCS::Output,
-    /// Fixed-prefix program objects in canonical order: bytecode, then the
-    /// independently pointed program-image bytes.
-    #[cfg(feature = "akita")]
-    pub program_one_hot_commitments: Vec<PCS::Output>,
-    #[cfg(feature = "akita")]
-    pub bytecode_chunk_count: usize,
 }
 
 impl<PCS: CommitmentScheme> CommittedProgramPreprocessing<PCS> {
     pub fn bytecode_chunk_count(&self) -> usize {
-        #[cfg(not(feature = "akita"))]
-        {
-            self.bytecode_chunk_commitments.len()
-        }
-        #[cfg(feature = "akita")]
-        {
-            self.bytecode_chunk_count
-        }
+        self.bytecode_chunk_commitments.len()
     }
 }
 
 /// Program preprocessing in one of two modes, detected at runtime from the
-/// deserialized preprocessing exactly like `jolt-prover-legacy`'s
-/// `ProgramPreprocessing`: `Full` carries the bytecode table and initial RAM
-/// image, `Committed` replaces them with trusted commitments plus metadata.
+/// deserialized preprocessing: `Full` carries the bytecode table and program
+/// memory, `Committed` replaces them with trusted commitments plus metadata.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "PCS::Output: Serialize",
     deserialize = "PCS::Output: serde::de::DeserializeOwned"
 ))]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "constructed once per preprocessing; boxing Committed buys nothing"
-)]
 pub enum ProgramPreprocessing<PCS: CommitmentScheme> {
     /// `Arc` so witness backends take an owning handle without deep-cloning
     /// the program-sized tables (serde `rc`: serializes as the contents).
-    Full(Arc<JoltProgramPreprocessing>),
+    Full(Arc<WasmProgramPreprocessing>),
     Committed(CommittedProgramPreprocessing<PCS>),
 }
 
 impl<PCS: CommitmentScheme> ProgramPreprocessing<PCS> {
-    pub fn as_full(&self) -> Option<&JoltProgramPreprocessing> {
+    pub fn as_full(&self) -> Option<&WasmProgramPreprocessing> {
         match self {
             Self::Full(full) => Some(full),
             Self::Committed(_) => None,
@@ -78,7 +81,7 @@ impl<PCS: CommitmentScheme> ProgramPreprocessing<PCS> {
 
     /// The owning counterpart of [`as_full`](Self::as_full) — a refcount
     /// bump, never a copy.
-    pub fn as_full_arc(&self) -> Option<Arc<JoltProgramPreprocessing>> {
+    pub fn as_full_arc(&self) -> Option<Arc<WasmProgramPreprocessing>> {
         match self {
             Self::Full(full) => Some(Arc::clone(full)),
             Self::Committed(_) => None,
@@ -92,66 +95,61 @@ impl<PCS: CommitmentScheme> ProgramPreprocessing<PCS> {
         }
     }
 
-    pub fn memory_layout(&self) -> &MemoryLayout {
+    pub fn memory(&self) -> MemoryLimits {
         match self {
-            Self::Full(full) => &full.memory_layout,
-            Self::Committed(committed) => &committed.memory_layout,
+            Self::Full(full) => full.memory,
+            Self::Committed(committed) => committed.meta.memory,
         }
     }
 
-    pub fn max_padded_trace_length(&self) -> usize {
+    pub fn max_trace_length(&self) -> usize {
         match self {
-            Self::Full(full) => full.max_padded_trace_length,
-            Self::Committed(committed) => committed.max_padded_trace_length,
+            Self::Full(full) => full.max_trace_length,
+            Self::Committed(committed) => committed.max_trace_length,
         }
     }
 
-    pub fn entry_address(&self) -> u64 {
+    /// The entry-stub pc of an exported function.
+    pub fn entry_pc(&self, export: &str) -> Option<Pc> {
         match self {
-            Self::Full(full) => full.bytecode.entry_address,
-            Self::Committed(committed) => committed.meta.entry_address,
+            Self::Full(full) => full.bytecode.entry(export),
+            Self::Committed(committed) => committed.meta.entries.get(export).copied(),
         }
     }
 
-    pub fn entry_bytecode_index(&self) -> Option<usize> {
-        match self {
-            Self::Full(full) => full.bytecode.entry_bytecode_index(),
-            Self::Committed(committed) => Some(committed.meta.entry_bytecode_index),
-        }
-    }
-
-    /// [`entry_bytecode_index`](Self::entry_bytecode_index), attributing an
-    /// entry address absent from the bytecode to the consuming `stage`.
-    pub fn entry_bytecode_index_checked(
+    /// [`entry_pc`](Self::entry_pc), attributing an unknown export to the
+    /// consuming `stage`.
+    pub fn entry_pc_checked(
         &self,
+        export: &str,
         stage: JoltRelationId,
-    ) -> Result<usize, VerifierError> {
-        self.entry_bytecode_index()
+    ) -> Result<Pc, VerifierError> {
+        self.entry_pc(export)
             .ok_or_else(|| VerifierError::StageClaimPublicInputFailed {
                 stage,
-                reason: "entry address was not found in bytecode preprocessing".to_string(),
+                reason: format!("export {export:?} was not found in bytecode preprocessing"),
             })
     }
 
+    /// Padded bytecode table length (the bytecode address domain).
     pub fn bytecode_len(&self) -> usize {
         match self {
-            Self::Full(full) => full.bytecode.code_size,
+            Self::Full(full) => full.bytecode.rows().len(),
             Self::Committed(committed) => committed.meta.bytecode_len,
-        }
-    }
-
-    pub fn min_bytecode_address(&self) -> u64 {
-        match self {
-            Self::Full(full) => full.ram.min_bytecode_address,
-            Self::Committed(committed) => committed.meta.min_bytecode_address,
         }
     }
 
     pub fn program_image_len_words(&self) -> usize {
         match self {
-            Self::Full(full) => full.ram.bytecode_words.len(),
+            Self::Full(full) => full.program_image().words.len(),
             Self::Committed(committed) => committed.meta.program_image_len_words,
         }
+    }
+
+    /// One past the last program-image word's RAM index.
+    pub fn program_image_end_index(&self) -> u64 {
+        PROGRAM_IMAGE_START_INDEX
+            .saturating_add(crate::num::u64_from_usize(self.program_image_len_words()))
     }
 }
 
@@ -167,18 +165,8 @@ where
 {
     pub program: ProgramPreprocessing<PCS>,
     pub preprocessing_digest: [u8; 32],
-    /// The main PCS setup: every per-polynomial opening on the homomorphic
-    /// build, the `OneHotTrace` object on the `akita` build (whose remaining
-    /// objects carry their own shape-exact setups below).
     pub pcs_setup: PCS::VerifierSetup,
     pub vc_setup: Option<VC::Setup>,
-    #[cfg(feature = "akita")]
-    pub untrusted_advice_setup: Option<PCS::VerifierSetup>,
-    #[cfg(feature = "akita")]
-    pub trusted_advice_setup: Option<PCS::VerifierSetup>,
-    /// Committed-program mode: setups matching `program_one_hot_commitments`.
-    #[cfg(feature = "akita")]
-    pub program_one_hot_setups: Vec<PCS::VerifierSetup>,
 }
 
 impl<PCS, VC> JoltVerifierPreprocessing<PCS, VC>
@@ -197,12 +185,6 @@ where
             preprocessing_digest,
             pcs_setup,
             vc_setup,
-            #[cfg(feature = "akita")]
-            untrusted_advice_setup: None,
-            #[cfg(feature = "akita")]
-            trusted_advice_setup: None,
-            #[cfg(feature = "akita")]
-            program_one_hot_setups: Vec::new(),
         }
     }
 }

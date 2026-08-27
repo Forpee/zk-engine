@@ -3,36 +3,39 @@
 //! Both matches below are total over [`JoltPolynomialId`] with **no wildcard
 //! arm**: adding a variant in jolt-claims fails compilation here until the
 //! variant is mapped to a derivation or added to an explicit exclusion arm
-//! with its reason. The exclusion reasons are asserted in tests.
+//! with its reason.
 
 use jolt_claims::protocols::jolt::{
     JoltCommittedPolynomial, JoltPolynomialId, JoltVirtualPolynomial,
 };
+use jolt_wasm_tables::WasmTable;
 
 use super::*;
 use crate::witnesses::{
-    BytecodeRaChunk, Imm, InstructionFlag, InstructionRaChunk, InstructionRafFlag,
-    LeftInstructionInput, LeftLookupOperand, LookupOutput, LookupTableFlag, NextIsFirstInSequence,
-    NextIsNoop, NextIsVirtual, NextPc, NextUnexpandedPc, OpFlag, Pc, Product, RamAddress,
+    BytecodeRaChunk, Flag, Imm, InstructionRaChunk, InstructionRafFlag, LeftInstructionInput,
+    LeftLookupOperand, LookupOutput, LookupTableFlag, NextPc, Pc, Product, RamAddress,
     RamHammingWeight, RamInc, RamRaChunk, RamReadValue, RamWriteValue, RdInc, RdWriteValue,
-    RightInstructionInput, RightLookupOperand, Rs1Value, Rs2Value, ShouldBranch, ShouldJump,
-    UnexpandedPc,
+    RightInstructionInput, RightLookupOperand, Rs1Value, Rs2Value, ShouldBranch,
 };
 use crate::{JoltWitnessOracle, PolynomialEncoding, Shape};
 
-/// Base-mode committed-program polynomials: precommitted from preprocessing,
-/// never derived from the execution trace.
+/// Committed-program polynomials: precommitted from preprocessing, never
+/// derived from the execution trace.
 pub(crate) const COMMITTED_PROGRAM_REASON: &str =
     "committed-program polynomial served from preprocessing, not the execution trace";
-/// Lattice-mode slots of the packed witness; base mode never constructs them.
+/// Lattice-mode slots of the packed witness; the WebAssembly stack does not
+/// construct them.
 pub(crate) const LATTICE_REASON: &str =
-    "lattice-mode packed-witness polynomial; base mode never constructs it";
+    "lattice-mode packed-witness polynomial; the WebAssembly stack never constructs it";
 /// Openings produced by kernels during proving (owned by the proof session).
 pub(crate) const PROTOCOL_INTERMEDIATE_REASON: &str =
     "protocol intermediate produced during proving, never served by a witness backend";
 /// Vocabulary with no consumer on the modular stack; no derivation exists.
 pub(crate) const UNSERVED_REASON: &str =
     "no consumer on the modular stack; no trace derivation is defined";
+/// WebAssembly programs have no advice memory.
+pub(crate) const NO_ADVICE_REASON: &str =
+    "WebAssembly programs have no trusted/untrusted advice memory";
 
 fn not_served(id: JoltPolynomialId, reason: &'static str) -> WitnessError {
     WitnessError::NotServed {
@@ -41,7 +44,7 @@ fn not_served(id: JoltPolynomialId, reason: &'static str) -> WitnessError {
     }
 }
 
-impl<T: TraceSource> TraceBackend<T> {
+impl TraceBackend {
     pub(crate) fn shape_of(&self, id: JoltPolynomialId) -> Result<Shape, WitnessError> {
         use JoltCommittedPolynomial as C;
         use JoltVirtualPolynomial as V;
@@ -61,67 +64,16 @@ impl<T: TraceSource> TraceBackend<T> {
                     require_index(index, self.ra_layout()?.ram())?;
                     Ok(Shape::new(self.one_hot_log_rows()?, OneHot))
                 }
-                C::TrustedAdvice => {
-                    if !self.config.include_trusted_advice {
-                        return Err(WitnessError::UnknownOracle {
-                            label: JOLT_VM_LABEL,
-                        });
-                    }
-                    Ok(Shape::new(
-                        Self::advice_log_rows(
-                            self.preprocessing.memory_layout.max_trusted_advice_size as usize,
-                        ),
-                        Compact,
-                    ))
-                }
-                C::UntrustedAdvice => {
-                    if !self.config.include_untrusted_advice {
-                        return Err(WitnessError::UnknownOracle {
-                            label: JOLT_VM_LABEL,
-                        });
-                    }
-                    Ok(Shape::new(
-                        Self::advice_log_rows(
-                            self.preprocessing.memory_layout.max_untrusted_advice_size as usize,
-                        ),
-                        Compact,
-                    ))
-                }
+                C::TrustedAdvice
+                | C::UntrustedAdvice
+                | C::TrustedAdviceBytes
+                | C::UntrustedAdviceBytes => Err(not_served(id, NO_ADVICE_REASON)),
                 C::BytecodeChunk(_) | C::ProgramImageInit => {
                     Err(not_served(id, COMMITTED_PROGRAM_REASON))
                 }
-                C::BalancedIncDigit(index) => {
-                    require_index(index, self.balanced_inc_digit_count()?)?;
-                    Ok(Shape::new(self.one_hot_log_rows()?, OneHot))
-                }
-                C::BalancedIncCarry => Ok(Shape::new(self.one_hot_log_rows()?, OneHot)),
-                C::TrustedAdviceBytes => {
-                    if !self.config.include_trusted_advice {
-                        return Err(WitnessError::UnknownOracle {
-                            label: JOLT_VM_LABEL,
-                        });
-                    }
-                    Ok(Shape::new(
-                        advice_bytes_cell_vars(
-                            self.preprocessing.memory_layout.max_trusted_advice_size as usize,
-                        ),
-                        Dense,
-                    ))
-                }
-                C::UntrustedAdviceBytes => {
-                    if !self.config.include_untrusted_advice {
-                        return Err(WitnessError::UnknownOracle {
-                            label: JOLT_VM_LABEL,
-                        });
-                    }
-                    Ok(Shape::new(
-                        advice_bytes_cell_vars(
-                            self.preprocessing.memory_layout.max_untrusted_advice_size as usize,
-                        ),
-                        Dense,
-                    ))
-                }
-                C::BytecodeRegisterSelector { .. }
+                C::BalancedIncDigit(_)
+                | C::BalancedIncCarry
+                | C::BytecodeRegisterSelector { .. }
                 | C::BytecodeCircuitFlag { .. }
                 | C::BytecodeInstructionFlag { .. }
                 | C::BytecodeLookupSelector { .. }
@@ -141,22 +93,16 @@ impl<T: TraceSource> TraceBackend<T> {
                     Ok(Shape::new(self.instruction_virtual_ra_log_rows()?, Dense))
                 }
                 V::LookupTableFlag(index) => {
-                    require_index(index, LookupTableKind::<RV64_XLEN>::COUNT)?;
+                    require_index(index, WasmTable::COUNT)?;
                     Ok(Shape::new(self.trace_log_rows(), Dense))
                 }
                 V::PC
-                | V::UnexpandedPC
                 | V::NextPC
-                | V::NextUnexpandedPC
-                | V::NextIsNoop
-                | V::NextIsVirtual
-                | V::NextIsFirstInSequence
                 | V::LeftLookupOperand
                 | V::RightLookupOperand
                 | V::LeftInstructionInput
                 | V::RightInstructionInput
                 | V::Product
-                | V::ShouldJump
                 | V::ShouldBranch
                 | V::Imm
                 | V::Rs1Value
@@ -168,8 +114,7 @@ impl<T: TraceSource> TraceBackend<T> {
                 | V::RamReadValue
                 | V::RamWriteValue
                 | V::RamHammingWeight
-                | V::OpFlags(_)
-                | V::InstructionFlags(_) => Ok(Shape::new(self.trace_log_rows(), Dense)),
+                | V::RowFlag(_) => Ok(Shape::new(self.trace_log_rows(), Dense)),
                 V::Rd | V::InstructionRaf | V::RamValInit => Err(not_served(id, UNSERVED_REASON)),
                 V::UnivariateSkip
                 | V::BytecodeValClaim(_)
@@ -179,33 +124,13 @@ impl<T: TraceSource> TraceBackend<T> {
                 | V::ProgramImageInitContributionRw => {
                     Err(not_served(id, PROTOCOL_INTERMEDIATE_REASON))
                 }
-                V::FusedInc => Ok(Shape::new(self.trace_log_rows(), Compact)),
+                V::FusedInc => Err(not_served(id, LATTICE_REASON)),
             },
         }
     }
-
-    fn balanced_inc_digit_count(&self) -> Result<usize, WitnessError> {
-        jolt_claims::protocols::jolt::lattice::BalancedIncChunking::new(
-            self.config.one_hot.committed_chunk_bits(),
-        )
-        .map(|chunking| chunking.chunk_count())
-        .map_err(|error| WitnessError::InvalidDimensions {
-            label: JOLT_VM_LABEL,
-            reason: error.to_string(),
-        })
-    }
 }
 
-/// An advice byte one-hot column's cell variable count, from the configured
-/// maximum advice size — the `(byte ‖ place ‖ word)` domain over the
-/// power-of-two padded word count.
-fn advice_bytes_cell_vars(max_bytes: usize) -> usize {
-    jolt_claims::protocols::jolt::lattice::geometry::word_byte_num_vars(
-        advice::advice_words(max_bytes).ilog2() as usize,
-    )
-}
-
-impl<F: JoltField, T: TraceSource> JoltWitnessOracle<F> for TraceBackend<T> {
+impl<F: JoltField> JoltWitnessOracle<F> for TraceBackend {
     fn shape(&self, id: JoltPolynomialId) -> Result<Shape, WitnessError> {
         self.shape_of(id)
     }
@@ -236,25 +161,16 @@ impl<F: JoltField, T: TraceSource> JoltWitnessOracle<F> for TraceBackend<T> {
                     self.ra_layout()?.ram(),
                     self.config.one_hot.committed_chunk_bits(),
                 ),
-                C::TrustedAdvice => self.materialize_trusted_advice(),
-                C::UntrustedAdvice => self.materialize_untrusted_advice(),
+                C::TrustedAdvice
+                | C::UntrustedAdvice
+                | C::TrustedAdviceBytes
+                | C::UntrustedAdviceBytes => Err(not_served(id, NO_ADVICE_REASON)),
                 C::BytecodeChunk(_) | C::ProgramImageInit => {
                     Err(not_served(id, COMMITTED_PROGRAM_REASON))
                 }
-                C::BalancedIncDigit(index) => self.materialize_balanced_inc_one_hot(
-                    crate::witnesses::BalancedIncColumn::Digit {
-                        width: self.config.one_hot.committed_chunk_bits(),
-                        index,
-                    },
-                ),
-                C::BalancedIncCarry => self.materialize_balanced_inc_one_hot(
-                    crate::witnesses::BalancedIncColumn::Carry {
-                        width: self.config.one_hot.committed_chunk_bits(),
-                    },
-                ),
-                C::TrustedAdviceBytes => self.materialize_trusted_advice_bytes(),
-                C::UntrustedAdviceBytes => self.materialize_untrusted_advice_bytes(),
-                C::BytecodeRegisterSelector { .. }
+                C::BalancedIncDigit(_)
+                | C::BalancedIncCarry
+                | C::BytecodeRegisterSelector { .. }
                 | C::BytecodeCircuitFlag { .. }
                 | C::BytecodeInstructionFlag { .. }
                 | C::BytecodeLookupSelector { .. }
@@ -275,18 +191,12 @@ impl<F: JoltField, T: TraceSource> JoltWitnessOracle<F> for TraceBackend<T> {
                     self.config.one_hot.lookup_virtual_chunk_bits(),
                 ),
                 V::PC => self.materialize_cycle::<F, Pc>(),
-                V::UnexpandedPC => self.materialize_cycle::<F, UnexpandedPc>(),
                 V::NextPC => self.materialize_cycle::<F, NextPc>(),
-                V::NextUnexpandedPC => self.materialize_cycle::<F, NextUnexpandedPc>(),
-                V::NextIsNoop => self.materialize_cycle::<F, NextIsNoop>(),
-                V::NextIsVirtual => self.materialize_cycle::<F, NextIsVirtual>(),
-                V::NextIsFirstInSequence => self.materialize_cycle::<F, NextIsFirstInSequence>(),
                 V::LeftLookupOperand => self.materialize_cycle::<F, LeftLookupOperand>(),
                 V::RightLookupOperand => self.materialize_cycle::<F, RightLookupOperand>(),
                 V::LeftInstructionInput => self.materialize_cycle::<F, LeftInstructionInput>(),
                 V::RightInstructionInput => self.materialize_cycle::<F, RightInstructionInput>(),
                 V::Product => self.materialize_cycle::<F, Product>(),
-                V::ShouldJump => self.materialize_cycle::<F, ShouldJump>(),
                 V::ShouldBranch => self.materialize_cycle::<F, ShouldBranch>(),
                 V::Imm => self.materialize_cycle::<F, Imm>(),
                 V::Rs1Value => self.materialize_cycle::<F, Rs1Value>(),
@@ -298,10 +208,7 @@ impl<F: JoltField, T: TraceSource> JoltWitnessOracle<F> for TraceBackend<T> {
                 V::RamReadValue => self.materialize_cycle::<F, RamReadValue>(),
                 V::RamWriteValue => self.materialize_cycle::<F, RamWriteValue>(),
                 V::RamHammingWeight => self.materialize_cycle::<F, RamHammingWeight>(),
-                V::OpFlags(flag) => self.materialize_cycle_indexed::<F, OpFlag, _>(flag),
-                V::InstructionFlags(flag) => {
-                    self.materialize_cycle_indexed::<F, InstructionFlag, _>(flag)
-                }
+                V::RowFlag(flag) => self.materialize_cycle_indexed::<F, Flag, _>(flag),
                 V::LookupTableFlag(table) => {
                     self.materialize_cycle_indexed::<F, LookupTableFlag, _>(table)
                 }
@@ -314,7 +221,7 @@ impl<F: JoltField, T: TraceSource> JoltWitnessOracle<F> for TraceBackend<T> {
                 | V::ProgramImageInitContributionRw => {
                     Err(not_served(id, PROTOCOL_INTERMEDIATE_REASON))
                 }
-                V::FusedInc => self.materialize_cycle::<F, crate::witnesses::FusedInc>(),
+                V::FusedInc => Err(not_served(id, LATTICE_REASON)),
             },
         }
     }

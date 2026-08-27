@@ -40,7 +40,6 @@ pub fn product_uniskip_input_values_from_stage1<F: JoltField>(
     ProductUniskipInputClaims {
         product: outer.product,
         should_branch: outer.should_branch,
-        should_jump: outer.should_jump,
     }
 }
 

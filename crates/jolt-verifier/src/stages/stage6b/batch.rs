@@ -22,8 +22,8 @@ use jolt_claims::NoChallenges;
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
 use jolt_openings::CommitmentScheme;
-use jolt_riscv::JoltInstructionRow;
 use jolt_transcript::Transcript;
+use jolt_wasm_ir::BytecodeRow;
 
 use super::booleanity::{Booleanity, BooleanityCyclePhaseChallenges};
 use super::bytecode_read_raf::{
@@ -74,7 +74,7 @@ pub struct Stage6bBuildParts<'a, F: JoltField> {
     pub entry_bytecode_index: usize,
     /// The full bytecode rows backing the full-program table fold
     /// (`None` in ZK and committed-program modes).
-    pub bytecode_table_rows: Option<&'a [JoltInstructionRow]>,
+    pub bytecode_table_rows: Option<&'a [BytecodeRow]>,
     pub carried: &'a Stage6aCarriedChallenges<F>,
     pub eta: Option<F>,
     pub stage1_cycle_binding: Vec<F>,
@@ -148,9 +148,7 @@ impl<F: JoltField> Stage6bSumchecks<F> {
         // in ZK.
         let committed_program = checked.precommitted.bytecode.is_some();
         let stage1_cycle_binding = stage1.cycle_binding_checked(JoltRelationId::BytecodeReadRaf)?;
-        let entry_bytecode_index = preprocessing
-            .program
-            .entry_bytecode_index_checked(JoltRelationId::BytecodeReadRaf)?;
+        let entry_bytecode_index = checked.entry_pc;
         let bytecode_table_rows = if checked.zk || committed_program {
             None
         } else {
@@ -163,8 +161,7 @@ impl<F: JoltField> Stage6bSumchecks<F> {
                         reason: "full bytecode table is unavailable".to_string(),
                     })?
                     .bytecode
-                    .bytecode
-                    .as_slice(),
+                    .rows(),
             )
         };
         let (address_val_stages, trusted_advice_reference_point, untrusted_advice_reference_point) =

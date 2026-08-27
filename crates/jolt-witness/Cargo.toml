@@ -3,10 +3,8 @@ name = "jolt-witness"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Witness oracle infrastructure for Jolt proving"
+description = "Trace-to-witness transformation for the Jolt WebAssembly zkVM"
 repository = "https://github.com/a16z/jolt"
-keywords = ["SNARK", "zkvm", "witness"]
-categories = ["cryptography"]
 
 [lints]
 workspace = true
@@ -15,25 +13,22 @@ workspace = true
 default = []
 test-utils = []
 parallel = ["dep:rayon", "jolt-utils/parallel"]
-field-inline = [
-  "dep:rayon",
-  "jolt-claims/field-inline",
-  "jolt-lookup-tables/field-inline",
-  "jolt-program/field-inline",
-  "jolt-riscv/field-inline",
-]
+# Inert: the RV64 field-inline witnesses are gone; dependents' feature lists
+# keep resolving until the RISC-V crates are deleted.
+field-inline = []
 
 [dependencies]
 jolt-claims.workspace = true
 jolt-witness-derive.workspace = true
 jolt-field.workspace = true
-jolt-lookup-tables.workspace = true
-jolt-program.workspace = true
-jolt-riscv.workspace = true
 jolt-utils.workspace = true
+jolt-wasm-backend = { workspace = true }
+jolt-wasm-ir = { workspace = true }
+jolt-wasm-program = { workspace = true }
+jolt-wasm-tables = { workspace = true }
 rayon = { workspace = true, optional = true }
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-common.workspace = true
+jolt-field = { workspace = true, features = ["bn254"] }

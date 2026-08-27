@@ -30,7 +30,7 @@ use jolt_claims::protocols::jolt::{
 use jolt_claims::{SumcheckChallenges, SymbolicSumcheck};
 use jolt_field::JoltField;
 use jolt_poly::EqPolynomial;
-use jolt_riscv::JoltInstructionRow;
+use jolt_wasm_ir::BytecodeRow;
 
 use crate::stages::relations::ConcreteSumcheck;
 use crate::VerifierError;
@@ -59,7 +59,7 @@ pub type BytecodeReadRafCycleOutputClaims<C> = LatticeBytecodeReadRafOutputClaim
 /// table against `eq(r_address)` immediately), so nothing borrowed is stored and
 /// the relation stays lifetime-free.
 pub struct BytecodeReadRafTableFoldInputs<'a, F: JoltField> {
-    pub bytecode: &'a [JoltInstructionRow],
+    pub bytecode: &'a [BytecodeRow],
     pub register_read_write_point: &'a [F],
     pub register_val_evaluation_point: &'a [F],
     /// Per-stage (1..=5) Fiat-Shamir gamma powers.

@@ -1,7 +1,7 @@
 //! The address phase of the bytecode read-RAF symbolic sumcheck.
 
 use jolt_field::Ring;
-use jolt_riscv::{CircuitFlags, InstructionFlags};
+use jolt_wasm_ir::RowFlag;
 use serde::{Deserialize, Serialize};
 
 use crate::protocols::jolt::geometry::bytecode::{
@@ -35,71 +35,55 @@ pub struct BytecodeReadRafAddressPhaseOutputClaims<C> {
 /// opening the `read_raf_address_phase` input `Expr` folds (plus the two PC
 /// claims). The generic `input_claim` evaluates the bind from these via that
 /// `Expr`, so the gamma-folding formula lives in one place rather than a
-/// hand-written resolver. Each Spartan-outer circuit flag is its own field (the
-/// `OuterRemainderOutputClaims` idiom), in `CIRCUIT_FLAGS` order; the
+/// hand-written resolver. Each Spartan-outer row flag is its own field (the
+/// `OuterRemainderOutputClaims` idiom), in `RowFlag::ALL` order; the
 /// `lookup_table_flags` family is indexed (`LookupTableFlag(i)`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, InputClaims)]
 pub struct BytecodeReadRafAddressPhaseInputClaims<C> {
-    #[opening(UnexpandedPC, from = SpartanOuter)]
-    pub outer_unexpanded_pc: C,
     #[opening(Imm, from = SpartanOuter)]
     pub outer_imm: C,
-    #[opening(OpFlags(CircuitFlags::AddOperands), from = SpartanOuter)]
+    #[opening(RowFlag(RowFlag::LeftIsRs1), from = SpartanOuter)]
+    pub outer_left_is_rs1: C,
+    #[opening(RowFlag(RowFlag::RightIsRs2), from = SpartanOuter)]
+    pub outer_right_is_rs2: C,
+    #[opening(RowFlag(RowFlag::RightIsImm), from = SpartanOuter)]
+    pub outer_right_is_imm: C,
+    #[opening(RowFlag(RowFlag::AddOperands), from = SpartanOuter)]
     pub outer_add_operands: C,
-    #[opening(OpFlags(CircuitFlags::SubtractOperands), from = SpartanOuter)]
-    pub outer_subtract_operands: C,
-    #[opening(OpFlags(CircuitFlags::MultiplyOperands), from = SpartanOuter)]
-    pub outer_multiply_operands: C,
-    #[opening(OpFlags(CircuitFlags::Load), from = SpartanOuter)]
+    #[opening(RowFlag(RowFlag::SubOperands), from = SpartanOuter)]
+    pub outer_sub_operands: C,
+    #[opening(RowFlag(RowFlag::MulOperands), from = SpartanOuter)]
+    pub outer_mul_operands: C,
+    #[opening(RowFlag(RowFlag::WriteLookupToRd), from = SpartanOuter)]
+    pub outer_write_lookup_to_rd: C,
+    #[opening(RowFlag(RowFlag::Load), from = SpartanOuter)]
     pub outer_load: C,
-    #[opening(OpFlags(CircuitFlags::Store), from = SpartanOuter)]
+    #[opening(RowFlag(RowFlag::Store), from = SpartanOuter)]
     pub outer_store: C,
-    #[opening(OpFlags(CircuitFlags::Jump), from = SpartanOuter)]
+    #[opening(RowFlag(RowFlag::Jump), from = SpartanOuter)]
     pub outer_jump: C,
-    #[opening(OpFlags(CircuitFlags::WriteLookupOutputToRD), from = SpartanOuter)]
-    pub outer_write_lookup_output_to_rd: C,
-    #[opening(OpFlags(CircuitFlags::VirtualInstruction), from = SpartanOuter)]
-    pub outer_virtual_instruction: C,
-    #[opening(OpFlags(CircuitFlags::Assert), from = SpartanOuter)]
+    #[opening(RowFlag(RowFlag::Branch), from = SpartanOuter)]
+    pub outer_branch: C,
+    #[opening(RowFlag(RowFlag::Assert), from = SpartanOuter)]
     pub outer_assert: C,
-    #[opening(OpFlags(CircuitFlags::DoNotUpdateUnexpandedPC), from = SpartanOuter)]
-    pub outer_do_not_update_unexpanded_pc: C,
-    #[opening(OpFlags(CircuitFlags::Advice), from = SpartanOuter)]
+    #[opening(RowFlag(RowFlag::Halt), from = SpartanOuter)]
+    pub outer_halt: C,
+    #[opening(RowFlag(RowFlag::Trap), from = SpartanOuter)]
+    pub outer_trap: C,
+    #[opening(RowFlag(RowFlag::Advice), from = SpartanOuter)]
     pub outer_advice: C,
-    #[opening(OpFlags(CircuitFlags::IsCompressed), from = SpartanOuter)]
-    pub outer_is_compressed: C,
-    #[opening(OpFlags(CircuitFlags::IsFirstInSequence), from = SpartanOuter)]
-    pub outer_is_first_in_sequence: C,
-    #[opening(OpFlags(CircuitFlags::IsLastInSequence), from = SpartanOuter)]
-    pub outer_is_last_in_sequence: C,
     #[opening(PC, from = SpartanOuter)]
     pub outer_pc: C,
-    #[opening(OpFlags(CircuitFlags::Jump), from = SpartanProductVirtualization)]
-    pub product_jump: C,
-    #[opening(InstructionFlags(InstructionFlags::Branch), from = SpartanProductVirtualization)]
+    #[opening(RowFlag(RowFlag::Branch), from = SpartanProductVirtualization)]
     pub product_branch: C,
-    #[opening(OpFlags(CircuitFlags::WriteLookupOutputToRD), from = SpartanProductVirtualization)]
-    pub product_write_lookup_output_to_rd: C,
-    #[opening(OpFlags(CircuitFlags::VirtualInstruction), from = SpartanProductVirtualization)]
-    pub product_virtual_instruction: C,
     #[opening(Imm, from = InstructionInputVirtualization)]
     pub instruction_input_imm: C,
-    #[opening(UnexpandedPC, from = SpartanShift)]
-    pub shift_unexpanded_pc: C,
-    #[opening(InstructionFlags(InstructionFlags::LeftOperandIsRs1Value), from = InstructionInputVirtualization)]
-    pub left_operand_is_rs1_value: C,
-    #[opening(InstructionFlags(InstructionFlags::LeftOperandIsPC), from = InstructionInputVirtualization)]
-    pub left_operand_is_pc: C,
-    #[opening(InstructionFlags(InstructionFlags::RightOperandIsRs2Value), from = InstructionInputVirtualization)]
-    pub right_operand_is_rs2_value: C,
-    #[opening(InstructionFlags(InstructionFlags::RightOperandIsImm), from = InstructionInputVirtualization)]
+    #[opening(RowFlag(RowFlag::LeftIsRs1), from = InstructionInputVirtualization)]
+    pub left_operand_is_rs1: C,
+    #[opening(RowFlag(RowFlag::RightIsRs2), from = InstructionInputVirtualization)]
+    pub right_operand_is_rs2: C,
+    #[opening(RowFlag(RowFlag::RightIsImm), from = InstructionInputVirtualization)]
     pub right_operand_is_imm: C,
-    #[opening(InstructionFlags(InstructionFlags::IsNoop), from = SpartanShift)]
-    pub is_noop: C,
-    #[opening(OpFlags(CircuitFlags::VirtualInstruction), from = SpartanShift)]
-    pub shift_virtual_instruction: C,
-    #[opening(OpFlags(CircuitFlags::IsFirstInSequence), from = SpartanShift)]
-    pub shift_is_first_in_sequence: C,
     #[opening(PC, from = SpartanShift)]
     pub shift_pc: C,
     #[opening(RdWa, from = RegistersReadWriteChecking)]
@@ -205,7 +189,6 @@ impl SymbolicSumcheck for ReadRafAddressPhase {
 mod tests {
     use super::*;
     use jolt_field::Fr;
-    use jolt_riscv::CIRCUIT_FLAGS;
 
     fn dimensions(num_committed_ra_polys: usize) -> BytecodeReadRafDimensions {
         BytecodeReadRafDimensions::new(5, 10, num_committed_ra_polys)
@@ -222,16 +205,15 @@ mod tests {
         );
     }
 
-    /// Pins the circuit-flag coverage of the input claims struct: every
-    /// `CircuitFlags` variant has a `SpartanOuter` field (a newly added flag
-    /// missing its field would make the input `Expr` reference an unresolvable
-    /// opening).
+    /// Pins the row-flag coverage of the input claims struct: every `RowFlag`
+    /// has a `SpartanOuter` field (a newly added flag missing its field would
+    /// make the input `Expr` reference an unresolvable opening).
     #[test]
-    fn input_claims_cover_circuit_flags() {
+    fn input_claims_cover_row_flags() {
         let claims = BytecodeReadRafAddressPhaseInputClaims::<Fr>::default();
-        for flag in CIRCUIT_FLAGS {
+        for flag in RowFlag::ALL {
             let outer = JoltOpeningId::virtual_polynomial(
-                crate::protocols::jolt::JoltVirtualPolynomial::OpFlags(flag),
+                crate::protocols::jolt::JoltVirtualPolynomial::RowFlag(flag),
                 JoltRelationId::SpartanOuter,
             );
             assert!(

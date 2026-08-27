@@ -20,8 +20,7 @@ pub use jolt_claims::protocols::jolt::relations::instruction::{
     InstructionInputChallenges, InstructionInputInputClaims, InstructionInputOutputClaims,
 };
 use jolt_claims::protocols::jolt::{
-    geometry::bytecode, geometry::dimensions::TraceDimensions, InstructionInputPublic,
-    JoltDerivedId, JoltOpeningId, JoltRelationId,
+    geometry::dimensions::TraceDimensions, InstructionInputPublic, JoltDerivedId, JoltRelationId,
 };
 use jolt_claims::SymbolicSumcheck;
 use jolt_field::JoltField;
@@ -69,14 +68,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for InstructionInput<F> {
         &self.symbolic
     }
 
-    fn aliased_output_openings() -> Vec<(JoltOpeningId, JoltOpeningId)> {
-        // The geometry pair is (shift, instruction-input); the shift opening is
-        // the canonical source, so the aliased/source order swaps here.
-        let [(shift_unexpanded_pc, instruction_unexpanded_pc)] =
-            bytecode::read_raf_consistency_openings();
-        vec![(instruction_unexpanded_pc, shift_unexpanded_pc)]
-    }
-
     fn derive_opening_points(
         &self,
         sumcheck_point: &[F],
@@ -86,8 +77,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for InstructionInput<F> {
         Ok(InstructionInputOutputClaims {
             left_operand_is_rs1: opening_point.clone(),
             rs1_value: opening_point.clone(),
-            left_operand_is_pc: opening_point.clone(),
-            unexpanded_pc: opening_point.clone(),
             right_operand_is_rs2: opening_point.clone(),
             rs2_value: opening_point.clone(),
             right_operand_is_imm: opening_point.clone(),
@@ -107,14 +96,14 @@ impl<F: JoltField> ConcreteSumcheck<F> for InstructionInput<F> {
         };
         match public_id {
             // Every instruction-input output shares the one opening point.
-            InstructionInputPublic::EqProduct => try_eq_mle(
-                output_points.unexpanded_pc(),
-                &self.product_remainder_opening_point,
-            )
-            .map_err(|error| VerifierError::StageClaimPublicInputFailed {
-                stage: JoltRelationId::InstructionInputVirtualization,
-                reason: error.to_string(),
-            }),
+            InstructionInputPublic::EqProduct => {
+                try_eq_mle(output_points.imm(), &self.product_remainder_opening_point).map_err(
+                    |error| VerifierError::StageClaimPublicInputFailed {
+                        stage: JoltRelationId::InstructionInputVirtualization,
+                        reason: error.to_string(),
+                    },
+                )
+            }
         }
     }
 }

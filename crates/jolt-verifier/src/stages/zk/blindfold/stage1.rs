@@ -15,7 +15,7 @@ where
     VC::Output: Clone,
 {
     let log_t = crate::num::ilog2(input.checked.trace_length);
-    let dimensions = SpartanOuterDimensions::rv64(log_t);
+    let dimensions = SpartanOuterDimensions::wasm(log_t);
     let uniskip_rounds = 1;
     let uniskip_degree = SPARTAN_OUTER_UNISKIP_FIRST_ROUND_DEGREE;
     let uniskip_domain = SumcheckDomain::centered_integer(SPARTAN_OUTER_UNISKIP_DOMAIN_SIZE);

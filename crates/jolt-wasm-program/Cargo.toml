@@ -1,0 +1,30 @@
+[package]
+name = "jolt-wasm-program"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Proof-side preprocessing of a Jolt WebAssembly IR program: the committed bytecode table and initial memory image"
+repository = "https://github.com/a16z/jolt"
+keywords = ["SNARK", "zkvm", "wasm"]
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+[features]
+serialization = ["dep:serde", "jolt-wasm-ir/serialization"]
+
+[dependencies]
+serde = { workspace = true, optional = true, features = ["derive"] }
+jolt-field = { workspace = true }
+jolt-r1cs = { workspace = true }
+jolt-wasm-backend = { workspace = true }
+jolt-wasm-ir = { workspace = true }
+jolt-wasm-tables = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+jolt-wasm-tables = { workspace = true }
+jolt-field = { workspace = true, features = ["bn254"] }
+jolt-wasm-frontend = { workspace = true }
+wat = { workspace = true }

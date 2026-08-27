@@ -4,7 +4,7 @@
 |-------------|--------------------------------|
 | Author(s)   | Claude, @Forpee                |
 | Created     | 2026-08-27                     |
-| Status      | implemented (frontend + table catalog) |
+| Status      | implemented (frontend, catalog, bytecode, trace row, R1CS, program/IO model) |
 | PR          |                                |
 
 ## Summary
@@ -19,7 +19,9 @@ first slices: four crates — `jolt-wasm-ir` (the shared IR contract),
 `jolt-wasm-frontend` (decode, validate, lower), `jolt-wasm-backend`
 (memory, interpreter emitting `Record`s, proof-row model), and
 `jolt-wasm-tables` (the WebAssembly lookup-table catalog, realizing every IR
-ALU op as a prefix–suffix-decomposable Jolt table). RISC-V crates remain in the tree only
+ALU op as a prefix–suffix-decomposable Jolt table), and `jolt-wasm-program`
+(proof-side preprocessing: the committed bytecode table, the initial memory
+image, and the compact proof-facing trace row). RISC-V crates remain in the tree only
 until the prover is re-pointed at these records; they are not to be extended.
 
 ## Intent
@@ -60,11 +62,31 @@ frontend and backend share only the IR crate:
   and `i64` values as-is; every `W32` op produces a zero-extended result. This
   keeps `i64.extend_i32_u` a `Move` and makes linear-memory addressing
   (`LINEAR_MEMORY_BASE + addr + offset`) overflow-free in `u64`.
-- **One address space.** Shadow stack (`0x1000_0000`), globals
-  (`0x2000_0000`, 8 bytes each), system words (`0x3000_0000`; slot 0 is the
-  linear-memory size in bytes), and linear memory (`0x8000_0000`) are disjoint
-  regions of one 64-bit guest address space; a record's RAM address is always
-  absolute. Shadow-stack exhaustion traps as `CallStackExhausted`.
+- **One address space, inside Jolt's RAM window.** Shadow stack
+  (`0x9000_0000`), globals (`0xA000_0000`, 8 bytes each), system words
+  (`0xB000_0000`: memory size, termination), public inputs (`0xB000_1000`),
+  public outputs (`0xB000_2000`), and linear memory (`0xC000_0000`) are
+  disjoint regions of one 64-bit guest address space, all at or above
+  `0x8000_0000` so no address translation is needed for the RAM argument; a
+  record's RAM address is always absolute. Shadow-stack exhaustion traps as
+  `CallStackExhausted`.
+- **Program/IO model.** Public I/O is memory: the host writes the entry's
+  arguments to the input words before execution and reads the results from
+  the output words and the termination word after; `PublicIo` gives the
+  initial image (program words + inputs) and the final public words (outputs
+  + termination = 1). Every export gets a synthesized **entry stub**
+  (`IrProgram::entries`): from an all-zero register file it sets `SP`, runs
+  the `start` function, loads the parameters from the input words, calls the
+  function through the normal calling convention, stores the results to the
+  output words, sets the termination word, and jumps to `Halt`. A trace is
+  therefore one contiguous segment beginning at the stub with zero
+  registers — no host-initialized state inside the proven execution.
+- **`memory.grow` is plain rows**: load the size word, add `delta` pages,
+  `LeU` against the static page cap (an immediate), branch; on success store
+  the new size and return the old size in pages, else `u32::MAX`. The
+  interpreter's linear backing store follows writes to the size word. There
+  is no special row class, so the lattice-mode store/rd-write disjointness
+  holds for every row.
 - **Doubleword RAM contract.** Every `Record` RAM access is one naturally
   aligned 64-bit word (`Ir::Load`/`Ir::Store`), matching Twist's
   doubleword-addressable argument (`specs/byte-addressable-memory.md` keeps
@@ -91,11 +113,6 @@ frontend and backend share only the IR crate:
   carries values `Move`s them down to the target label's base height first.
   `br_table` is a compare-and-branch chain; `select` is a branch around a
   `Move`.
-- **Record stream segments.** `Machine::invoke` runs the `start` function
-  (if any) and then the entry export as separate host-level calls. Each
-  segment starts with host-initialized registers (parameters in frame slots,
-  `SP` past a halt return address at `SHADOW_STACK_BASE`) and ends with the
-  `Halt` record at `HALT_PC = 0`. The pc chains within a segment.
 - **The ALU vocabulary is the table catalog.** `jolt_wasm_ir::AluOp` has one
   variant per lookup table (`Add/Sub/Mul` at 32/64, `And/Andn/Or/Xor`,
   `Eq/Ne/LtU/LtS/GeU/GeS/LeU`, `Srl/Sra/Rotr` over a shift bitmask,
@@ -137,10 +154,53 @@ frontend and backend share only the IR crate:
   rd, store value = rs2, rd = lookup output under `WRITE_LOOKUP_TO_RD`,
   assert rows have output 1, branch/assert ops are boolean, next pc = output
   under `JUMP`, = imm under `BRANCH` with output 1, = pc under `HALT`, else
-  pc + 1; `MEMORY_GROW` rewrites the size word). Differences from RV64:
+  pc + 1). Differences from RV64:
   absolute branch/jump targets, no link-register write on jumps, no
   expanded/compressed pc, register-or-immediate right operands on ALU and
   assert rows.
+- **Bytecode preprocessing** (`jolt-wasm-program`): `WasmBytecode::preprocess`
+  turns `IrProgram::code` into the committed table of packed 24-byte
+  `BytecodeRow`s (`imm`, `RowFlags`, `rs1`/`rs2`/`rd` ids, `WasmTable` id) —
+  the static half of every proof row — validating that pc 0 is the `Halt`
+  trampoline, immediate jump/branch targets are in range, branch/assert ops
+  are boolean, and every export's entry stub lies inside the program. The table is padded to a power of two (≥ 2) with the
+  `Halt` row: a pc self-loop with no writes, the canonical no-op, so padding
+  cycles are `Halt` at pc 0. IR pcs are dense, so a `Record` links to its row
+  by `pc` alone (no expanded/unexpanded pc map). `BytecodeColumn` names the
+  per-pc columns the bytecode read-RAF argument folds (`Pc`, `Imm`, each
+  flag bit, `Rs1/Rs2/Rd`, one `TableFlag` per catalog table, `HasLookup`);
+  `column_values` yields a column's hypercube evaluations and `encode` the
+  canonical bytes a program commitment is taken over. `initial_memory_words`
+  is the RAM argument's initial state: the non-zero aligned words of the data
+  segments, globals, the memory-size word, and the run's inputs.
+- **Compact trace row** (`jolt-wasm-program::WasmTraceRow`, 64 bytes,
+  size-asserted): a `Record` materialized once at the trace boundary with
+  the logical-column accessor API the witness/sumcheck code consumes
+  (`rs1_value`, `rs2_value`, `rd_pre_value`, `rd_write_value`, `ram_address`,
+  `ram_read_value`, `ram_write_value`, `pc`, `next_pc`, `imm`, register and
+  table ids, flags). Four aliased value slots per row class — non-memory
+  `rs1|rs2|rd_pre|rd_write`; load `rs1|addr|rd_pre|rd_write` (= ram read =
+  ram write); store `rs1|rs2(=ram write)|ram_read|addr`; `memory.grow`
+  `rs1|old size|rd_pre|new size` with the RAM address in `imm` and `rd_write`
+  derived from the size words. `from_record` enforces the class contract
+  (load value = rd write, store value = rs2, grow result derivation, operand
+  ids match the row spec). The row is self-sufficient: `lookup_index()`
+  (from its operand-mode flags) and `lookup_output()` (the `WasmTable` entry
+  by id) need no `AluOp`, and `bytecode_row()` recovers the committed static
+  half. `WasmTraceRow::default()` is the `Halt` padding row.
+- **Uniform R1CS** (`jolt_r1cs::constraints::wasm`): the constraint-form
+  `check_record` transcribed into 23 `guard · (left − right) = 0` rows and 2
+  product rows over 33 variables per cycle (const, 16 inputs, the 16
+  `RowFlags` bits in bit order). Beyond the RV64 set it constrains the
+  instruction-input selection (`LEFT_IS_RS1/PC`, `RIGHT_IS_RS2/IMM`, zero
+  otherwise) in-row and replaces the pc rules with four disjoint guards (`Jump`: next pc =
+  lookup output; `ShouldBranch`: next pc = imm; `Halt`: next pc = pc;
+  otherwise pc + 1). `jolt-wasm-program::r1cs::cycle_witness` fills the
+  layout from a `WasmTraceRow`; the immediate column is signed
+  (`BytecodeRow::imm_signed`: memory rows carry a byte offset, e.g. the
+  shadow-stack reload at `SP − 8`), so the bytecode `Imm` column and the
+  witness share one definition. Traces are single-segment (the entry stub
+  folds `start` in), so the cross-cycle pc chain holds end to end.
 - **Traps are typed and total.** Division by zero, signed overflow, OOB
   memory, `unreachable`, invalid jumps, and stack exhaustion surface as
   `ExecutionError::Trap { pc, trap }`; nothing panics on guest input.
@@ -151,10 +211,17 @@ frontend and backend share only the IR crate:
   multi-memory, memory64, bulk memory, exceptions, GC types. Each is a typed
   `DecodeError` today.
 - Register spilling for frames larger than 120 slots.
-- Proof-side integration: bytecode preprocessing over `IrProgram`, a
-  compact proof row from `Record`, a WASM R1CS constraint set encoding
-  `check_record`, re-pointing `jolt-prover`'s instruction lookup argument at
-  `WasmTable`, and deleting the RISC-V crates.
+- Proof-side integration: re-pointing `jolt-prover` (Spartan over
+  `constraints::wasm`, bytecode read-RAF over `WasmBytecode`,
+  instruction lookups over `WasmTable`, RAM over the WASM address space,
+  witness generation over `WasmTraceRow`), and deleting the RISC-V crates.
+  The modular prover's protocol vocabulary (`jolt-claims` ids such as
+  `UnexpandedPC`, `NextIsVirtual`, `OpFlags(CircuitFlags)`,
+  `LookupTableFlag` sized by `LookupTableKind::COUNT`) is RV64's; this is a
+  vocabulary rewrite across claims/witness/prover/verifier/kernels, not a
+  drop-in.
+- Proving a trapping execution (a trap ends the trace without the
+  termination word; the public output is then "no result").
 - Tracing performance (chunked/parallel execution) — the interpreter is the
   reference oracle.
 
@@ -188,9 +255,21 @@ frontend and backend share only the IR crate:
 - [x] Every `AluOp`'s table matches `AluOp::evaluate` on 2,000 random
       in-domain inputs plus corner cases, and on every lookup row of a real
       trace exercising every expansion (`jolt-wasm-tables/tests/catalog.rs`).
+- [x] Every record of a real trace addresses the bytecode row of its own
+      instruction; padding rows are the halt row; exports resolve to entry
+      pcs; the initial image is word-for-word what the machine starts from
+      (`jolt-wasm-program/tests/preprocess.rs`).
+- [x] Every `WasmTraceRow` accessor reproduces its record (registers, RAM,
+      pc chain), its static half equals the committed bytecode row, its
+      self-computed lookup output equals the rd write / assert value, and
+      contract violations are rejected (`jolt-wasm-program/tests/trace_row.rs`).
+- [x] Every row of a real trace (all six row classes) and the padding row
+      satisfy `wasm_trace_constraints`; tampering rd, RAM address, or next pc
+      is rejected by the owning constraint (`jolt-wasm-program/tests/r1cs.rs`).
 - [x] `cargo clippy -p jolt-wasm-ir -p jolt-wasm-frontend -p jolt-wasm-backend
-      -p jolt-wasm-tables --all-targets -- -D warnings` clean; the frontend and
-      backend do not depend on each other.
+      -p jolt-wasm-tables -p jolt-wasm-program -p jolt-r1cs --all-targets
+      -- -D warnings` clean; the frontend and backend do not depend on each
+      other.
 
 ### Testing Strategy
 
@@ -221,6 +300,9 @@ jolt-wasm-backend                                         ▼
                                                     Ok | RowViolation
 jolt-wasm-tables      AluOp ──WasmTable::of──▶ prefix–suffix table; lookup_index(op, left, right)
                       (jolt-lookup-tables: + clz / ctz / popcnt tables, prefixes, suffixes)
+jolt-wasm-program     IrProgram ──preprocess──▶ WasmBytecode { [BytecodeRow] padded, entries } + initial memory words
+                      [Record] ──build_trace_rows──▶ [WasmTraceRow] (64 B, aliased slots, self-computed lookup output)
+                      WasmTraceRow ──r1cs::cycle_witness──▶ [F; 34] ⊨ jolt_r1cs::constraints::wasm (24 eq + 2 product rows)
 ```
 
 ### Alternatives Considered

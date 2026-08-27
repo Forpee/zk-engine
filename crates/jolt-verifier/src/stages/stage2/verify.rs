@@ -9,8 +9,9 @@ use jolt_claims::NoChallenges;
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
 use jolt_openings::CommitmentScheme;
-use jolt_program::preprocess::PublicIoMemory;
 use jolt_transcript::Transcript;
+use jolt_wasm_ir::layout::RAM_BASE;
+use jolt_wasm_program::PublicIoMemory;
 
 use super::{
     instruction_claim_reduction::{
@@ -115,13 +116,8 @@ where
     // Build the five batch relations once, pre-branch; each owns its input/output
     // claim algebra (single-sourced with its jolt-claims formula and the BlindFold
     // constraint). The product uni-skip stays hand-coded above.
-    let lowest_address = checked.public_io.memory_layout.get_lowest_address();
-    let public_memory = PublicIoMemory::new(&checked.public_io).map_err(|error| {
-        VerifierError::StageClaimPublicInputFailed {
-            stage: JoltRelationId::RamOutputCheck,
-            reason: error.to_string(),
-        }
-    })?;
+    let lowest_address = RAM_BASE;
+    let public_memory = PublicIoMemory::new(&checked.public_io);
     let sumchecks = Stage2BatchSumchecks {
         ram_read_write: RamReadWriteChecking::new(
             read_write_dimensions,

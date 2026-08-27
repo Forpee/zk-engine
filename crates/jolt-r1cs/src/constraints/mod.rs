@@ -3,3 +3,4 @@
 pub mod field_constraints;
 pub mod jolt;
 pub mod rv64;
+pub mod wasm;

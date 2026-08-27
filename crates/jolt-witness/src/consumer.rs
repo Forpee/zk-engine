@@ -4,14 +4,13 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use jolt_program::preprocess::JoltProgramPreprocessing;
-use jolt_riscv::JoltTraceRow as TraceRow;
+use jolt_wasm_program::WasmProgramPreprocessing;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 use crate::bundle::WitnessBundle;
 use crate::witnesses::WitnessEnv;
-use crate::{WitnessError, JOLT_VM_LABEL};
+use crate::{TraceRow, WitnessError, JOLT_VM_LABEL};
 
 /// One consumer of a bundle stream. `Option<C>` is also a consumer:
 /// membership in a set is static, presence is runtime.
@@ -147,7 +146,7 @@ pub trait RowSource {
 pub struct RandomAccessRows {
     rows: Arc<Vec<TraceRow>>,
     cycles: usize,
-    preprocessing: Arc<JoltProgramPreprocessing>,
+    preprocessing: Arc<WasmProgramPreprocessing>,
     padding: TraceRow,
 }
 
@@ -155,7 +154,7 @@ impl RandomAccessRows {
     pub(crate) fn new(
         rows: Arc<Vec<TraceRow>>,
         cycles: usize,
-        preprocessing: Arc<JoltProgramPreprocessing>,
+        preprocessing: Arc<WasmProgramPreprocessing>,
     ) -> Result<Self, WitnessError> {
         if rows.len() > cycles {
             return Err(WitnessError::InvalidWitnessData {
@@ -277,7 +276,7 @@ impl<W: WitnessBundle + Clone + Send + Sync> StreamConsumer for CollectBundles<W
 mod tests {
     use super::*;
     use crate::testing::with_sample_backend;
-    use crate::witnesses::{Extract, NextUnexpandedPc, ToField, UnexpandedPc};
+    use crate::witnesses::{Extract, NextPc, Pc, ToField};
     use crate::BundleSource;
     use jolt_claims::protocols::jolt::JoltPolynomialId;
     use jolt_field::Fr;
@@ -288,8 +287,8 @@ mod tests {
     /// boundaries are observable.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct WindowBundle {
-        pc: UnexpandedPc,
-        next_pc: NextUnexpandedPc,
+        pc: Pc,
+        next_pc: NextPc,
     }
 
     impl WitnessBundle for WindowBundle {
@@ -299,8 +298,8 @@ mod tests {
             env: &WitnessEnv<'_>,
         ) -> Result<Self, WitnessError> {
             Ok(Self {
-                pc: UnexpandedPc::extract(row, next, env)?,
-                next_pc: NextUnexpandedPc::extract(row, next, env)?,
+                pc: Pc::extract(row, next, env)?,
+                next_pc: NextPc::extract(row, next, env)?,
             })
         }
 
@@ -416,7 +415,7 @@ mod tests {
             let table = crate::JoltWitnessOracle::<Fr>::oracle_table(
                 backend,
                 JoltPolynomialId::Virtual(
-                    jolt_claims::protocols::jolt::JoltVirtualPolynomial::UnexpandedPC,
+                    jolt_claims::protocols::jolt::JoltVirtualPolynomial::PC,
                 ),
             )
             .unwrap();
