@@ -13,17 +13,15 @@ use crate::protocols::jolt::{
 use crate::SymbolicSumcheck;
 use crate::{challenge, derived, opening, InputClaims, OutputClaims, SumcheckChallenges};
 
-/// The full set of openings produced by the RAM value-check sumcheck: the staged
-/// `Val_init` advice contributions (untrusted/trusted advice block evaluations,
-/// each present only when its commitment is), the staged committed program-image
-/// contribution (present only in committed program mode), and the main `ram_ra`
-/// /`ram_inc` openings sharing one opening point. Generic over the cell. The
-/// advice / program-image leaves are absent (`None`) in the ZK point-only form,
-/// where BlindFold carries those openings.
+/// The full set of openings produced by the RAM value-check sumcheck: the
+/// staged committed program-image contribution (present only in committed
+/// program mode) and the main `ram_ra`/`ram_inc` openings sharing one opening
+/// point. Generic over the cell. The program-image leaf is absent (`None`) in
+/// the ZK point-only form, where BlindFold carries that opening.
 ///
 /// WARNING: this struct's `canonical_order()` lists every leaf contiguously, but
 /// the stage-4 Fiat-Shamir append order interleaves these openings around the
-/// register openings (advice + program-image first, then registers, then
+/// register openings (program-image first, then registers, then
 /// `ram_ra`/`ram_inc`). The stage-4 aggregate therefore hand-writes its
 /// `opening_values` rather than concatenating each instance's openings; see
 /// `Stage4OutputClaims` in `jolt-verifier`.
@@ -35,10 +33,6 @@ use crate::{challenge, derived, opening, InputClaims, OutputClaims, SumcheckChal
 ))]
 #[relation(RamValCheck)]
 pub struct RamValCheckOutputClaims<C> {
-    #[opening(untrusted_advice)]
-    pub untrusted_advice: Option<C>,
-    #[opening(trusted_advice)]
-    pub trusted_advice: Option<C>,
     #[opening(ProgramImageInitContributionRw)]
     pub program_image: Option<C>,
     #[opening(RamRa)]
@@ -49,24 +43,20 @@ pub struct RamValCheckOutputClaims<C> {
 
 /// Consumed openings of the RAM value-check claim: the read-write `val` (stage 2)
 /// and output-check `val_final` (stage 2), reduced against `Val_init`, whose
-/// committed pieces (advice / program image) are present only in some proof
-/// configurations. Generic over the cell.
+/// committed program-image piece is present only in committed program mode.
+/// Generic over the cell.
 #[derive(Clone, Debug, Default, PartialEq, Eq, InputClaims)]
 pub struct RamValCheckInputClaims<C> {
     #[opening(RamVal, from = RamReadWriteChecking)]
     pub ram_val: C,
     #[opening(RamValFinal, from = RamOutputCheck)]
     pub ram_val_final: C,
-    #[opening(untrusted_advice, from = RamValCheck)]
-    pub untrusted_advice: Option<C>,
-    #[opening(trusted_advice, from = RamValCheck)]
-    pub trusted_advice: Option<C>,
     #[opening(ProgramImageInitContributionRw, from = RamValCheck)]
     pub program_image: Option<C>,
 }
 
 /// One committed contribution to the `Val_init(r_address)` decomposition: a
-/// `Public` selector weighting a committed advice / program-image `opening`. The
+/// `Public` selector weighting the committed program-image `opening`. The
 /// selector *value* is supplied by the concrete side (`resolve_public`); the
 /// symbolic shape carries only the `(selector_id, opening_id)` structure, keeping
 /// the relation field-independent.
@@ -77,9 +67,8 @@ pub struct RamValContribution {
 }
 
 /// The RAM value-check shape: the trace dimensions plus the present `Val_init`
-/// contributions, in the canonical order the BlindFold constraint also uses
-/// (program image first, then advice). An empty `contributions` is the full-init
-/// form (`Val_init` is wholly public).
+/// contributions (the committed program image). An empty `contributions` is the
+/// full-init form (`Val_init` is wholly public).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RamValCheckShape {
     pub dimensions: TraceDimensions,
@@ -173,49 +162,38 @@ mod tests {
     }
 
     /// The remodel's soundness anchor: the `Public`-symbol input expression must
-    /// evaluate to the same value the pre-remodel baked-constant decomposition did
-    /// (proven equal to the full-init formula in `geometry::ram`'s tests). With
-    /// `InitEval = public_eval` and `InitSelector = neg_selector`, the
-    /// `public·opening` term equals the old `constant·opening` term.
+    /// evaluate to the same value the baked-constant decomposition did (proven
+    /// equal to the full-init formula in `geometry::ram`'s tests). With
+    /// `InitEval = public_eval` and `InitSelectorProgramImage = neg_selector`,
+    /// the `public·opening` term equals the old `constant·opening` term.
     #[test]
     fn ram_val_check_symbolic_evaluates_like_decomposed_init() {
-        use crate::protocols::jolt::geometry::ram::val_check_advice_opening;
-        use crate::protocols::jolt::JoltAdviceKind;
+        use crate::protocols::jolt::geometry::claim_reductions::program_image;
 
         let public_eval = Fr::from_u64(3);
-        let untrusted_neg_selector = -Fr::from_u64(5);
-        let trusted_neg_selector = -Fr::from_u64(7);
+        let neg_selector = -Fr::from_u64(5);
+        let image_opening = program_image::ram_val_check_contribution_opening();
 
         let relation = RamValCheck::new(RamValCheckShape {
             dimensions: trace_dimensions(),
-            contributions: vec![
-                RamValContribution {
-                    selector: RamValCheckPublic::InitSelector(JoltAdviceKind::Untrusted),
-                    opening: val_check_advice_opening(JoltAdviceKind::Untrusted),
-                },
-                RamValContribution {
-                    selector: RamValCheckPublic::InitSelector(JoltAdviceKind::Trusted),
-                    opening: val_check_advice_opening(JoltAdviceKind::Trusted),
-                },
-            ],
+            contributions: vec![RamValContribution {
+                selector: RamValCheckPublic::InitSelectorProgramImage,
+                opening: image_opening,
+            }],
         });
 
         let val_rw = Fr::from_u64(11);
         let val_final = Fr::from_u64(13);
         let gamma = Fr::from_u64(17);
-        let untrusted_advice = Fr::from_u64(19);
-        let trusted_advice = Fr::from_u64(23);
+        let image = Fr::from_u64(19);
         let zero = Fr::from_u64(0);
-        let init_eval = public_eval
-            - untrusted_neg_selector * untrusted_advice
-            - trusted_neg_selector * trusted_advice;
+        let init_eval = public_eval - neg_selector * image;
 
         let input = relation.input_expression::<Fr>().evaluate(
             |id| match *id {
                 id if id == ram_val() => val_rw,
                 id if id == ram_val_final() => val_final,
-                id if id == val_check_advice_opening(JoltAdviceKind::Untrusted) => untrusted_advice,
-                id if id == val_check_advice_opening(JoltAdviceKind::Trusted) => trusted_advice,
+                id if id == image_opening => image,
                 _ => zero,
             },
             |id| match *id {
@@ -224,12 +202,9 @@ mod tests {
             },
             |id| match *id {
                 JoltDerivedId::RamValCheck(RamValCheckPublic::InitEval) => public_eval,
-                JoltDerivedId::RamValCheck(RamValCheckPublic::InitSelector(
-                    JoltAdviceKind::Untrusted,
-                )) => untrusted_neg_selector,
-                JoltDerivedId::RamValCheck(RamValCheckPublic::InitSelector(
-                    JoltAdviceKind::Trusted,
-                )) => trusted_neg_selector,
+                JoltDerivedId::RamValCheck(RamValCheckPublic::InitSelectorProgramImage) => {
+                    neg_selector
+                }
                 _ => zero,
             },
         );

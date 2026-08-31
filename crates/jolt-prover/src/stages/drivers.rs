@@ -91,8 +91,7 @@ mod stage6b {
     use jolt_verifier::stages::stage6b::booleanity::Booleanity;
     use jolt_verifier::stages::stage6b::bytecode_read_raf::BytecodeReadRafCycle;
     use jolt_verifier::stages::stage6b::committed_reduction_cycle_phase::{
-        BytecodeReductionCyclePhase, ProgramImageReductionCyclePhase, TrustedAdviceCyclePhase,
-        UntrustedAdviceCyclePhase,
+        BytecodeReductionCyclePhase, ProgramImageReductionCyclePhase,
     };
     // The packed batch has no inc member — the fused-inc read-raf stages
     // discharge the reduced inc claims instead.
@@ -131,9 +130,6 @@ mod stage6b {
 }
 
 mod stage7 {
-    use jolt_verifier::stages::stage7::advice_address_phase::{
-        TrustedAdviceAddressPhase, UntrustedAdviceAddressPhase,
-    };
     use jolt_verifier::stages::stage7::committed_reduction_address_phase::{
         BytecodeReductionAddressPhase, ProgramImageReductionAddressPhase,
     };

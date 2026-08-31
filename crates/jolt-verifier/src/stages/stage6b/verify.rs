@@ -21,8 +21,6 @@ use super::{
     bytecode_read_raf::BytecodeReadRafInputClaims,
     committed_reduction_cycle_phase::{
         program_image_reduction_cycle_phase_input_values_from_upstream,
-        trusted_advice_cycle_phase_input_values_from_upstream,
-        untrusted_advice_cycle_phase_input_values_from_upstream,
         BytecodeReductionCyclePhaseInputClaims,
     },
     instruction_ra_virtualization::{
@@ -174,14 +172,6 @@ where
     // itself); one call per `Option` member. Transcript-free (runs before the
     // batched verify); the tampering suite asserts generic rejection.
     validate_member_presence(
-        sumchecks.trusted_advice.as_ref(),
-        claims.trusted_advice.as_ref(),
-    )?;
-    validate_member_presence(
-        sumchecks.untrusted_advice.as_ref(),
-        claims.untrusted_advice.as_ref(),
-    )?;
-    validate_member_presence(
         sumchecks.bytecode_reduction.as_ref(),
         claims.bytecode_reduction.as_ref(),
     )?;
@@ -247,8 +237,7 @@ where
 /// otherwise reach the Fiat-Shamir absorb, letting a malicious prover pass off
 /// padded, non-canonical proofs. Also checks the bytecode reduction's
 /// intermediate-vs-chunks shape. Member presence is enforced separately by the
-/// hand-listed `validate_member_presence` calls; a missing advice inner opening is caught by
-/// `expected_final_claim` (the advice cycle phase's `expected_output`).
+/// hand-listed `validate_member_presence` calls.
 fn validate_cycle_phase_claim_shape<F: JoltField>(
     formula_dimensions: &JoltFormulaDimensions,
     claims: &Stage6bOutputClaims<F>,
@@ -381,20 +370,6 @@ pub fn stage6b_input_values_from_upstream<F: JoltField>(
             &stage4.output_values,
             stage5,
         ),
-        trusted_advice: sumchecks
-            .trusted_advice
-            .as_ref()
-            .map(|_| {
-                trusted_advice_cycle_phase_input_values_from_upstream(&stage4.ram_val_check_init)
-            })
-            .transpose()?,
-        untrusted_advice: sumchecks
-            .untrusted_advice
-            .as_ref()
-            .map(|_| {
-                untrusted_advice_cycle_phase_input_values_from_upstream(&stage4.ram_val_check_init)
-            })
-            .transpose()?,
         bytecode_reduction: sumchecks.bytecode_reduction.as_ref().map(|_| {
             BytecodeReductionCyclePhaseInputClaims {
                 val_stages: address_claims.bytecode_read_raf.val_stages.clone(),
@@ -462,14 +437,6 @@ pub fn stage6b_opening_values<F: JoltField>(
     values.extend(claims.ram_ra_virtualization.opening_values());
     values.extend(claims.instruction_ra_virtualization.opening_values());
     values.extend(claims.inc_claim_reduction.opening_values());
-    // Each advice member is a single-slot per-kind claims struct, so it
-    // contributes exactly its own kind's opening.
-    if let Some(advice) = &claims.trusted_advice {
-        values.extend(advice.opening_values());
-    }
-    if let Some(advice) = &claims.untrusted_advice {
-        values.extend(advice.opening_values());
-    }
     if let Some(reduction) = &claims.bytecode_reduction {
         values.extend(reduction.opening_values());
     }
@@ -545,15 +512,8 @@ fn append_opening_claims<F, T>(
         .instruction_ra_virtualization
         .append_openings(transcript);
     claims.inc_claim_reduction.append_openings(transcript);
-    // The optional members single-source their per-field Fiat-Shamir order from the
-    // `OutputClaims` derive too. Each advice member is a single-slot per-kind claims
-    // struct, so it absorbs exactly its own kind's opening.
-    if let Some(advice) = &claims.trusted_advice {
-        advice.append_openings(transcript);
-    }
-    if let Some(advice) = &claims.untrusted_advice {
-        advice.append_openings(transcript);
-    }
+    // The optional members single-source their per-field Fiat-Shamir order from
+    // the `OutputClaims` derive too.
     if let Some(reduction) = &claims.bytecode_reduction {
         reduction.append_openings(transcript);
     }
@@ -613,8 +573,6 @@ mod tests {
                     ram_inc: fr(9),
                     rd_inc: fr(10),
                 },
-                trusted_advice: None,
-                untrusted_advice: None,
                 bytecode_reduction: None,
                 program_image_reduction: None,
             },
@@ -679,8 +637,6 @@ mod tests {
                 ram_inc: fr(11),
                 rd_inc: fr(12),
             },
-            trusted_advice: None,
-            untrusted_advice: None,
             bytecode_reduction: None,
             program_image_reduction: None,
         }

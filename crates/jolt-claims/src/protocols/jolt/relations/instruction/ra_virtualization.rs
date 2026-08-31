@@ -141,7 +141,7 @@ mod tests {
                     polynomial: JoltPolynomialId::Virtual(JoltVirtualPolynomial::InstructionRa(i)),
                     relation: JoltRelationId::InstructionReadRaf,
                 } => virtual_ra[i],
-                _ => zero,
+                JoltOpeningId::Polynomial { .. } => zero,
             },
             |id| match *id {
                 JoltChallengeId::InstructionRaVirtualization(
@@ -159,7 +159,7 @@ mod tests {
                         JoltPolynomialId::Committed(JoltCommittedPolynomial::InstructionRa(i)),
                     relation: JoltRelationId::InstructionRaVirtualization,
                 } => committed_ra[i],
-                _ => zero,
+                JoltOpeningId::Polynomial { .. } => zero,
             },
             |id| match *id {
                 JoltChallengeId::InstructionRaVirtualization(

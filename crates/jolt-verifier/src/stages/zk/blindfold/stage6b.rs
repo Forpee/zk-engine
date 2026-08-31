@@ -28,14 +28,6 @@ where
         formula_dimensions.instruction_ra_virtualization,
     );
     let inc_claims = relations::claim_reductions::increments::ClaimReduction::new(trace_dimensions);
-    let trusted_layout = advice_layout(input, JoltAdviceKind::Trusted);
-    let trusted_claims = trusted_layout.as_ref().map(|layout| {
-        relations::claim_reductions::advice::TrustedCyclePhase::new(layout.dimensions())
-    });
-    let untrusted_layout = advice_layout(input, JoltAdviceKind::Untrusted);
-    let untrusted_claims = untrusted_layout.as_ref().map(|layout| {
-        relations::claim_reductions::advice::UntrustedCyclePhase::new(layout.dimensions())
-    });
     let bytecode_reduction_claims = bytecode_reduction_layout.as_ref().map(|layout| {
         relations::claim_reductions::bytecode::CyclePhase::new((
             layout.dimensions(),
@@ -70,12 +62,6 @@ where
         relation_claim(&instruction_ra_claims),
         relation_claim(&inc_claims),
     ];
-    if let Some(claim) = trusted_claims {
-        batch_claims.push(relation_claim(&claim));
-    }
-    if let Some(claim) = untrusted_claims {
-        batch_claims.push(relation_claim(&claim));
-    }
     if let Some(claim) = &bytecode_reduction_claims {
         batch_claims.push(relation_claim(claim));
     }
@@ -126,18 +112,6 @@ where
         }
         .canonical_order(),
     );
-    if let Some(layout) = trusted_layout {
-        output_ids.extend(advice::cycle_phase_output_openings(
-            JoltAdviceKind::Trusted,
-            layout.dimensions(),
-        ));
-    }
-    if let Some(layout) = untrusted_layout {
-        output_ids.extend(advice::cycle_phase_output_openings(
-            JoltAdviceKind::Untrusted,
-            layout.dimensions(),
-        ));
-    }
     if let Some(layout) = bytecode_reduction_layout.as_ref() {
         output_ids.extend(bytecode_reduction::cycle_phase_output_openings(
             layout.dimensions(),
@@ -163,10 +137,6 @@ where
     )
 }
 
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "fail-closed: unmatched opening ids yield no alias and are reported missing below"
-)]
 fn stage6_cycle_output_openings_and_aliases<F: JoltField>(
     formula_dimensions: JoltFormulaDimensions,
     bytecode_ra_opening_points: &[Vec<F>],
@@ -190,7 +160,7 @@ fn stage6_cycle_output_openings_and_aliases<F: JoltField>(
             {
                 bytecode_output_openings.bytecode_ra.get(index).copied()
             }
-            _ => None,
+            JoltOpeningId::Polynomial { .. } => None,
         };
         if let Some(source) = source {
             aliases.push(OpeningAlias::new(id, source));

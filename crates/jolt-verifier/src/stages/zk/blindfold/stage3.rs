@@ -18,10 +18,6 @@ where
         relations::claim_reductions::registers::ClaimReduction::new(dimensions);
 
     values.public(
-        VerifierPublicId::Challenge(JoltChallengeId::from(SpartanShiftChallenge::Gamma)),
-        input.stage3.challenges.shift.gamma,
-    )?;
-    values.public(
         VerifierPublicId::Challenge(JoltChallengeId::from(InstructionInputChallenge::Gamma)),
         input.stage3.challenges.instruction_input.gamma,
     )?;
@@ -51,15 +47,9 @@ where
             stage_sumcheck_error(JoltRelationId::SpartanProductVirtualization, error)
         })?;
     let product_opening_point = product_point.iter().rev().copied().collect::<Vec<_>>();
-    let eq_plus_one_product =
-        EqPlusOnePolynomial::new(product_opening_point.clone()).evaluate(&shift_opening_point);
     values.public(
         JoltDerivedId::from(SpartanShiftPublic::EqPlusOneOuter),
         eq_plus_one_outer,
-    )?;
-    values.public(
-        JoltDerivedId::from(SpartanShiftPublic::EqPlusOneProduct),
-        eq_plus_one_product,
     )?;
 
     let instruction_point = input

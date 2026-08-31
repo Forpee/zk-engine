@@ -10,10 +10,10 @@
 //! squeeze, the PCS opening, the final evaluation-claim absorb — is
 //! `HomomorphicBatch::prove_batch`, byte-identical to the verifier's inlined
 //! sequence. The prover-only work is the grid-embedded witness materialization
-//! (the backend's joint-opening slot; advice polynomials block-embed rather
+//! (the backend's joint-opening slot; precommitted polynomials block-embed rather
 //! than prefix-embed) and the hint reordering + combination (stage 0 retains
-//! hints in proof-commitment order, advice hints included; the batch runs in
-//! final-opening order, and the ragged advice hints pad with identity rows in
+//! hints in proof-commitment order; the batch runs in
+//! final-opening order, and ragged hints pad with identity rows in
 //! `combine_hints`).
 
 use jolt_claims::protocols::jolt::geometry::committed_openings::{
@@ -71,8 +71,6 @@ pub fn prove_stage8<F, PCS, VC, T>(
     config: &ProverConfig,
     preprocessing: &JoltProverPreprocessing<PCS, VC>,
     commitments: &JoltCommitments<PCS::Output>,
-    untrusted_advice_commitment: Option<&PCS::Output>,
-    trusted_advice_commitment: Option<&PCS::Output>,
     hints: &[(JoltCommittedPolynomial, PCS::OpeningHint)],
     stage6b: &Stage6bClearOutput<F>,
     stage7: &Stage7ClearOutput<F>,
@@ -136,9 +134,7 @@ where
     let entries = batch_entries::<F, PCS, VC>(
         &preprocessing.verifier,
         commitments,
-        untrusted_advice_commitment,
         layout,
-        trusted_advice_commitment,
         &opening_point,
         hamming_opening_point.as_slice(),
         inc_opening_point,
@@ -163,14 +159,11 @@ where
 
     // Witness materialization (grid-embedded, batch order) and the hints
     // reordered from stage 0's proof-commitment order.
-    let include_trusted = precommitted.trusted_advice.is_some();
-    let include_untrusted = precommitted.untrusted_advice.is_some();
     let chunk_count = precommitted
         .bytecode
         .as_ref()
         .map(|layout| layout.chunk_count());
-    let order =
-        final_opening_polynomial_order(layout, include_trusted, include_untrusted, chunk_count);
+    let order = final_opening_polynomial_order(layout, chunk_count);
     let grid = CommitmentGrid {
         total_vars: config
             .commitment_total_vars(CommittedProgramCandidates::from_schedule(precommitted)),

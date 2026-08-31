@@ -1,23 +1,18 @@
 use jolt_claims::protocols::jolt::{
     geometry::{
         claim_reductions::{
-            advice,
             bytecode::{self as bytecode_reduction},
             program_image,
         },
         dimensions::JoltFormulaDimensions,
     },
-    JoltAdviceKind, JoltOpeningId, JoltRelationId, PrecommittedReductionLayout,
+    JoltOpeningId, JoltRelationId, PrecommittedReductionLayout,
 };
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
 use jolt_openings::CommitmentScheme;
 use jolt_transcript::Transcript;
 
-use super::advice_address_phase::{
-    trusted_advice_input_values_from_upstream, untrusted_advice_input_values_from_upstream,
-    TrustedAdviceAddressPhase, UntrustedAdviceAddressPhase,
-};
 use super::committed_reduction_address_phase::{
     BytecodeReductionAddressPhase, BytecodeReductionAddressPhaseInputClaims,
     ProgramImageReductionAddressPhase, ProgramImageReductionAddressPhaseInputClaims,
@@ -34,10 +29,7 @@ use crate::{
     proof::JoltProof,
     stages::{
         stage4::{Stage4ClearOutput, Stage4Output},
-        stage6b::{
-            committed_reduction_cycle_phase::advice_reference_point_from_upstream,
-            outputs::Stage6bOutputPoints, Stage6bClearOutput, Stage6bOutput,
-        },
+        stage6b::{outputs::Stage6bOutputPoints, Stage6bClearOutput, Stage6bOutput},
         zk::committed,
         PrecommittedSchedule,
     },
@@ -65,7 +57,7 @@ where
     )?;
 
     // The clear-only reference geometry each address phase's expected-output term
-    // reads (advice / program-image RAM address points, bytecode cycle-phase
+    // reads (the program-image RAM address point, bytecode cycle-phase
     // weights) lives in the stage 4/6 clear outputs, absent in ZK where those
     // terms are proved by BlindFold and the relations' `derive_output_term` never
     // runs.
@@ -89,7 +81,7 @@ where
 
     // Draw the hamming-weight reduction's batching gamma (a single `challenge_scalar`,
     // matching the relation's default `draw_challenges`) path-agnostically before the
-    // ZK/clear branch; the advice and committed-program address phases draw nothing
+    // ZK/clear branch; the committed-program address phases draw nothing
     // (`NoChallenges`). BlindFold sources the gamma from
     // `challenges.hamming_weight_claim_reduction.gamma`.
     let challenges = sumchecks.draw_challenges(transcript)?;
@@ -177,40 +169,8 @@ pub fn build_stage7_sumchecks<F: JoltField>(
         stage7_hamming_virtualization_address_points(hamming_dimensions, stage6_points)?,
     );
 
-    // The staged advice RAM address point from stage 4's RAM value-check (`None`
-    // in ZK), the clear-only reference the advice `FinalScale` term reads.
-    let advice_reference = |kind| {
-        clear.and_then(|(stage4, _)| {
-            advice_reference_point_from_upstream(&stage4.ram_val_check_init, kind)
-        })
-    };
-
     Ok(Stage7Sumchecks {
         hamming_weight_claim_reduction: hamming,
-        trusted_advice: address_phase_member(
-            schedule.trusted_advice.as_ref(),
-            stage6_points.advice_cycle_phase_variables(JoltAdviceKind::Trusted),
-            advice::cycle_phase_advice_opening(JoltAdviceKind::Trusted),
-            |layout, cycle_phase_variables| {
-                TrustedAdviceAddressPhase::new(
-                    layout,
-                    advice_reference(JoltAdviceKind::Trusted),
-                    cycle_phase_variables,
-                )
-            },
-        )?,
-        untrusted_advice: address_phase_member(
-            schedule.untrusted_advice.as_ref(),
-            stage6_points.advice_cycle_phase_variables(JoltAdviceKind::Untrusted),
-            advice::cycle_phase_advice_opening(JoltAdviceKind::Untrusted),
-            |layout, cycle_phase_variables| {
-                UntrustedAdviceAddressPhase::new(
-                    layout,
-                    advice_reference(JoltAdviceKind::Untrusted),
-                    cycle_phase_variables,
-                )
-            },
-        )?,
         bytecode_address_phase: address_phase_member(
             schedule.bytecode.as_ref(),
             stage6_points.bytecode_cycle_phase_variables(),
@@ -265,7 +225,7 @@ fn address_phase_member<F: JoltField, L: PrecommittedReductionLayout, M>(
 }
 
 /// Assemble the stage-7 consumed opening *values* from the upstream stage-6 clear
-/// output into the generated `Stage7InputClaims` aggregate. The two advice members
+/// output into the generated `Stage7InputClaims` aggregate. The
 /// and the two committed-program members are `Some` exactly when their address
 /// phase runs (tracking each `Stage7Sumchecks` member's presence), so a present
 /// member always has its input cell populated. Public because the prover's
@@ -277,16 +237,6 @@ pub fn stage7_input_values_from_upstream<F: JoltField>(
     let cycle_phase = &stage6.output_values;
     Ok(Stage7InputClaims {
         hamming_weight_claim_reduction: hamming_weight_input_values_from_upstream(cycle_phase),
-        trusted_advice: sumchecks
-            .trusted_advice
-            .as_ref()
-            .map(|_| trusted_advice_input_values_from_upstream(cycle_phase))
-            .transpose()?,
-        untrusted_advice: sumchecks
-            .untrusted_advice
-            .as_ref()
-            .map(|_| untrusted_advice_input_values_from_upstream(cycle_phase))
-            .transpose()?,
         bytecode_address_phase: sumchecks
             .bytecode_address_phase
             .as_ref()

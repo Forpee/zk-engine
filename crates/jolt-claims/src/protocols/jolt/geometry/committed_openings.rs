@@ -22,27 +22,16 @@ pub fn proof_commitment_order(layout: JoltRaPolynomialLayout) -> Vec<JoltCommitt
 /// commitments to the batch.
 pub fn final_opening_polynomial_order(
     layout: JoltRaPolynomialLayout,
-    include_trusted_advice: bool,
-    include_untrusted_advice: bool,
     committed_program_chunks: Option<usize>,
 ) -> Vec<JoltCommittedPolynomial> {
     let mut polynomials = Vec::with_capacity(
-        2 + layout.total()
-            + usize::from(include_trusted_advice)
-            + usize::from(include_untrusted_advice)
-            + committed_program_chunks.map_or(0, |chunk_count| chunk_count + 1),
+        2 + layout.total() + committed_program_chunks.map_or(0, |chunk_count| chunk_count + 1),
     );
     polynomials.push(JoltCommittedPolynomial::RamInc);
     polynomials.push(JoltCommittedPolynomial::RdInc);
     polynomials.extend((0..layout.instruction()).map(JoltCommittedPolynomial::InstructionRa));
     polynomials.extend((0..layout.bytecode()).map(JoltCommittedPolynomial::BytecodeRa));
     polynomials.extend((0..layout.ram()).map(JoltCommittedPolynomial::RamRa));
-    if include_trusted_advice {
-        polynomials.push(JoltCommittedPolynomial::TrustedAdvice);
-    }
-    if include_untrusted_advice {
-        polynomials.push(JoltCommittedPolynomial::UntrustedAdvice);
-    }
     if let Some(chunk_count) = committed_program_chunks {
         polynomials.extend((0..chunk_count).map(JoltCommittedPolynomial::BytecodeChunk));
         polynomials.push(JoltCommittedPolynomial::ProgramImageInit);
@@ -51,15 +40,7 @@ pub fn final_opening_polynomial_order(
 }
 
 pub fn final_opening_id(polynomial: JoltCommittedPolynomial) -> JoltOpeningId {
-    match polynomial {
-        JoltCommittedPolynomial::TrustedAdvice => {
-            JoltOpeningId::trusted_advice(JoltRelationId::AdviceClaimReduction)
-        }
-        JoltCommittedPolynomial::UntrustedAdvice => {
-            JoltOpeningId::untrusted_advice(JoltRelationId::AdviceClaimReduction)
-        }
-        polynomial => JoltOpeningId::committed(polynomial, final_opening_relation(polynomial)),
-    }
+    JoltOpeningId::committed(polynomial, final_opening_relation(polynomial))
 }
 
 fn final_opening_relation(polynomial: JoltCommittedPolynomial) -> JoltRelationId {
@@ -70,18 +51,11 @@ fn final_opening_relation(polynomial: JoltCommittedPolynomial) -> JoltRelationId
         JoltCommittedPolynomial::InstructionRa(_)
         | JoltCommittedPolynomial::BytecodeRa(_)
         | JoltCommittedPolynomial::RamRa(_) => JoltRelationId::HammingWeightClaimReduction,
-        JoltCommittedPolynomial::TrustedAdvice | JoltCommittedPolynomial::UntrustedAdvice => {
-            JoltRelationId::AdviceClaimReduction
-        }
         JoltCommittedPolynomial::BytecodeChunk(_) => JoltRelationId::BytecodeClaimReduction,
         JoltCommittedPolynomial::ProgramImageInit => JoltRelationId::ProgramImageClaimReduction,
 
         JoltCommittedPolynomial::BalancedIncDigit(_)
         | JoltCommittedPolynomial::BalancedIncCarry => JoltRelationId::HammingWeightClaimReduction,
-        JoltCommittedPolynomial::UntrustedAdviceBytes => {
-            JoltRelationId::UntrustedAdviceReconstruction
-        }
-        JoltCommittedPolynomial::TrustedAdviceBytes => JoltRelationId::TrustedAdviceReconstruction,
         JoltCommittedPolynomial::ProgramImageBytes => JoltRelationId::ProgramImageReconstruction,
         JoltCommittedPolynomial::BytecodeRegisterSelector { .. }
         | JoltCommittedPolynomial::BytecodeCircuitFlag { .. }
@@ -228,7 +202,7 @@ mod tests {
     #[test]
     fn final_opening_order_matches_stage8_rlc_order() {
         assert_eq!(
-            final_opening_polynomial_order(layout(), true, true, None),
+            final_opening_polynomial_order(layout(), Some(2)),
             vec![
                 JoltCommittedPolynomial::RamInc,
                 JoltCommittedPolynomial::RdInc,
@@ -237,15 +211,16 @@ mod tests {
                 JoltCommittedPolynomial::BytecodeRa(0),
                 JoltCommittedPolynomial::RamRa(0),
                 JoltCommittedPolynomial::RamRa(1),
-                JoltCommittedPolynomial::TrustedAdvice,
-                JoltCommittedPolynomial::UntrustedAdvice,
+                JoltCommittedPolynomial::BytecodeChunk(0),
+                JoltCommittedPolynomial::BytecodeChunk(1),
+                JoltCommittedPolynomial::ProgramImageInit,
             ]
         );
     }
 
     #[test]
     fn final_opening_ids_use_sumcheck_sources() {
-        let ids = final_opening_polynomial_order(layout(), true, false, None)
+        let ids = final_opening_polynomial_order(layout(), None)
             .into_iter()
             .map(final_opening_id)
             .collect::<Vec<_>>();
@@ -280,7 +255,6 @@ mod tests {
                     JoltCommittedPolynomial::RamRa(1),
                     JoltRelationId::HammingWeightClaimReduction,
                 ),
-                JoltOpeningId::trusted_advice(JoltRelationId::AdviceClaimReduction),
             ]
         );
     }

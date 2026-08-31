@@ -25,7 +25,6 @@ use self::precommitted_reduction::ReferencePrecommittedAddress;
 use self::spartan_outer::ReferenceOuterRemainder;
 use self::spartan_product::ReferenceProductRemainder;
 
-pub mod advice_claim_reduction;
 pub mod booleanity;
 pub mod bytecode_claim_reduction;
 pub mod bytecode_read_raf;
@@ -95,7 +94,6 @@ where
             registers_claim_reduction: Box::new(ReferenceBackend),
             registers_read_write: Box::new(ReferenceBackend),
             ram_val_check: Box::new(ReferenceBackend),
-            advice_opening: Box::new(ReferenceBackend),
             instruction_read_raf: Box::new(ReferenceBackend),
             ram_ra_claim_reduction: Box::new(ReferenceBackend),
             registers_val_evaluation: Box::new(ReferenceBackend),
@@ -107,17 +105,9 @@ where
             ram_ra_virtualization: Box::new(ReferenceBackend),
             instruction_ra_virtualization: Box::new(ReferenceBackend),
             inc_claim_reduction: Box::new(ReferenceBackend),
-            trusted_advice_cycle: Box::new(ReferenceBackend),
-            untrusted_advice_cycle: Box::new(ReferenceBackend),
             bytecode_reduction_cycle: Box::new(ReferenceBackend),
             program_image_reduction_cycle: Box::new(ReferenceBackend),
             hamming_weight_claim_reduction: Box::new(ReferenceBackend),
-            trusted_advice_address: Box::new(ReferencePrecommittedAddress::new(
-                "stage 6b parked no trusted-advice reduction state for the scheduled address phase",
-            )),
-            untrusted_advice_address: Box::new(ReferencePrecommittedAddress::new(
-                "stage 6b parked no untrusted-advice reduction state for the scheduled address phase",
-            )),
             bytecode_reduction_address: Box::new(ReferencePrecommittedAddress::new(
                 "stage 6b parked no bytecode reduction state for the scheduled address phase",
             )),

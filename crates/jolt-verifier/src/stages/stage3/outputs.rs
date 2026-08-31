@@ -113,7 +113,7 @@ mod tests {
     fn sumchecks() -> Stage3Sumchecks<Fr> {
         let dimensions = TraceDimensions::new(4);
         Stage3Sumchecks {
-            shift: SpartanShift::new(dimensions, Vec::new(), Vec::new()),
+            shift: SpartanShift::new(dimensions, Vec::new()),
             instruction_input: InstructionInput::new(dimensions, Vec::new()),
             registers_claim_reduction: RegistersClaimReduction::new(dimensions, Vec::new()),
         }

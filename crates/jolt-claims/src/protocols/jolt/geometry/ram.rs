@@ -3,8 +3,8 @@ use jolt_field::{JoltField, Ring};
 use crate::opening;
 
 use super::super::{
-    JoltAdviceKind, JoltCommittedPolynomial, JoltExpr, JoltOpeningId, JoltRelationId,
-    JoltVirtualPolynomial, RamRaClaimReductionPublic, RamValCheckPublic,
+    JoltCommittedPolynomial, JoltExpr, JoltOpeningId, JoltRelationId, JoltVirtualPolynomial,
+    RamRaClaimReductionPublic, RamValCheckPublic,
 };
 use super::dimensions::ReadWriteDimensions;
 
@@ -90,9 +90,8 @@ impl<F> From<F> for RamValCheckInit<F> {
 }
 
 /// One staged-opening contribution to `Val_init(r_address)`: the init
-/// evaluation gains `-neg_selector * opening`. Advice polynomials contribute
-/// with their block-selector weight; in committed program mode the program
-/// image contributes its staged scalar with weight one.
+/// evaluation gains `-neg_selector * opening`. In committed program mode the
+/// program image contributes its staged scalar with weight one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RamValCheckInitContribution<F> {
     /// The `Public` selector id this contribution is weighted by in the symbolic
@@ -111,35 +110,12 @@ impl<F> RamValCheckInitContribution<F> {
         }
     }
 
-    pub fn untrusted(neg_selector: F) -> Self {
-        Self::new(
-            RamValCheckPublic::InitSelector(JoltAdviceKind::Untrusted),
-            neg_selector,
-            JoltOpeningId::untrusted_advice(JoltRelationId::RamValCheck),
-        )
-    }
-
-    pub fn trusted(neg_selector: F) -> Self {
-        Self::new(
-            RamValCheckPublic::InitSelector(JoltAdviceKind::Trusted),
-            neg_selector,
-            JoltOpeningId::trusted_advice(JoltRelationId::RamValCheck),
-        )
-    }
-
     pub fn program_image(neg_selector: F) -> Self {
         Self::new(
             RamValCheckPublic::InitSelectorProgramImage,
             neg_selector,
             super::claim_reductions::program_image::ram_val_check_contribution_opening(),
         )
-    }
-}
-
-pub fn val_check_advice_opening(kind: JoltAdviceKind) -> JoltOpeningId {
-    match kind {
-        JoltAdviceKind::Trusted => JoltOpeningId::trusted_advice(JoltRelationId::RamValCheck),
-        JoltAdviceKind::Untrusted => JoltOpeningId::untrusted_advice(JoltRelationId::RamValCheck),
     }
 }
 

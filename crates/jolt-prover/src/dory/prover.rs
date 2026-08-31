@@ -34,7 +34,7 @@ use jolt_verifier::stages::stage7::outputs::Stage7ClearOutput;
 use jolt_wasm_program::PublicIo;
 use jolt_witness::JoltWitnessPlane;
 
-use crate::dory::stages::stage0::{prove_stage0, TrustedAdviceCommitment};
+use crate::dory::stages::stage0::prove_stage0;
 use crate::dory::stages::stage8::prove_stage8;
 use crate::recorder::ProofMode;
 use crate::stages::stage1::prove_stage1;
@@ -93,25 +93,15 @@ fn stage_flamegraph(_stage: &str, _session: &ProofSession, _output: &dyn Any) {}
 /// the proof verbatim), `witness` the trace-backed provider the kernels read,
 /// and `public_io` the Fiat-Shamir preamble's program I/O.
 ///
-/// `trusted_advice` is the externally supplied (preprocessing-time)
-/// trusted-advice commitment and opening hint; pass it exactly when the guest
-/// consumes trusted advice. Untrusted advice needs no extra input — its
-/// polynomial is committed at prove time from the witness when
-/// `public_io.untrusted_advice` is non-empty.
-///
-/// Supported envelope: either trace layout,
-/// with or without trusted/untrusted advice (non-dominant: the advice grid
-/// must not exceed the main commitment grid) and with or without
+/// Supported envelope: either trace layout, with or without
 /// committed-program preprocessing (which requires
 /// `preprocessing.committed_program` — the prover-retained full program and
-/// chunk/image hints). Dominant advice returns
-/// [`ProverError::Unsupported`] at stage 0.
+/// chunk/image hints).
 #[tracing::instrument(skip_all, name = "jolt_prover::prove", fields(trace_length = config.trace_length))]
 pub fn prove<F, PCS, VC, T, W>(
     backend: &JoltBackend<F, PCS>,
     preprocessing: &JoltProverPreprocessing<PCS, VC>,
     config: &ProverConfig,
-    trusted_advice: Option<&TrustedAdviceCommitment<PCS>>,
     witness: &W,
     public_io: &PublicIo,
 ) -> Result<JoltProof<PCS, VC>, ProverError<F>>
@@ -134,7 +124,6 @@ where
         &mut session,
         preprocessing,
         config,
-        trusted_advice,
         witness,
         public_io,
     )?;
@@ -253,8 +242,6 @@ where
         config,
         preprocessing,
         &stage0.commitments,
-        stage0.untrusted_advice_commitment.as_ref(),
-        trusted_advice.map(|trusted| &trusted.commitment),
         &stage0.hints,
         &stage6b.clear_output,
         &stage7.clear_output,
@@ -283,7 +270,6 @@ where
             commitments: stage0.commitments,
             stages,
             joint_opening_proof: stage8.joint_opening_proof,
-            untrusted_advice_commitment: stage0.untrusted_advice_commitment,
             claims: JoltProofClaims::Clear(ClearProofClaims {
                 stage1: stage1.claims,
                 stage2: stage2.claims,
@@ -313,7 +299,6 @@ where
             commitments: stage0.commitments,
             stages,
             joint_opening_proof: stage8.joint_opening_proof,
-            untrusted_advice_commitment: stage0.untrusted_advice_commitment,
             claims: JoltProofClaims::Zk {
                 blindfold_proof: (),
             },
@@ -342,7 +327,6 @@ where
         let blindfold_proof = blindfold::prove_blindfold::<F, PCS, VC, T>(
             preprocessing,
             public_io,
-            trusted_advice.map(|trusted| &trusted.commitment),
             &shell,
             &witnesses,
             &final_opening,

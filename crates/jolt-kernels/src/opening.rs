@@ -10,7 +10,7 @@
 //! (the witness's native `k · T + t` views permute, dense polynomials sit at
 //! address slot zero) — matching the address-major commit placement and the
 //! verifier's `commitment_embedding_scale` under the `[r_cycle ‖ r_address]`
-//! unified point. In both orders the precommitted polynomials (advice,
+//! unified point. In both orders the precommitted polynomials (
 //! bytecode chunks, program image) BLOCK-embed — their own balanced matrix
 //! (`2^σ_p` columns) lands in the grid matrix's top-left corner, so
 //! coefficient `row · 2^σ_p + col` sits at grid index `row · 2^σ_main + col`
@@ -23,10 +23,10 @@
 
 use std::collections::BTreeMap;
 
-use jolt_claims::protocols::jolt::{JoltAdviceKind, JoltCommittedPolynomial};
+use jolt_claims::protocols::jolt::JoltCommittedPolynomial;
 use jolt_field::JoltField;
 use jolt_poly::MultilinearPoly;
-use jolt_witness::{JoltWitnessOracle, JoltWitnessPlane};
+use jolt_witness::JoltWitnessPlane;
 
 use crate::commitment::CommitmentGrid;
 use crate::{KernelError, ProofSession};
@@ -48,20 +48,4 @@ pub trait JointOpeningPolynomials<F: JoltField> {
         precommitted_tables: &BTreeMap<JoltCommittedPolynomial, Vec<F>>,
         grid: CommitmentGrid,
     ) -> Result<Vec<Box<dyn MultilinearPoly<F>>>, KernelError<F>>;
-}
-
-/// The stage-4 advice opening-evaluation slot: evaluate the trusted/untrusted
-/// advice polynomial at `point` (big-endian) — the value the RAM value-check
-/// stages under `@RamValCheck` for the kind. A non-sumcheck slot (a single
-/// opening evaluation), so it keeps a hand-shaped trait; the advice
-/// polynomial's REDUCTION duties are ordinary `PrepareKernel` members
-/// (`precommitted_reduction`).
-pub trait AdviceOpeningEvaluation<F: JoltField> {
-    fn evaluate(
-        &self,
-        session: &mut ProofSession,
-        kind: JoltAdviceKind,
-        point: &[F],
-        witness: &dyn JoltWitnessOracle<F>,
-    ) -> Result<F, KernelError<F>>;
 }

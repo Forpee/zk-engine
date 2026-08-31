@@ -1,6 +1,6 @@
 //! The stage 6b committed-program claim-reduction cycle phases.
 //!
-//! In committed-program mode the advice, program-image, and per-chunk bytecode
+//! In committed-program mode the program-image and per-chunk bytecode
 //! polynomials are reduced over the shared precommitted schedule. Each reduction's
 //! cycle phase runs here (stage 6b); when the polynomial still has active
 //! address-phase rounds it stages an intermediate opening consumed by stage 7,
@@ -16,15 +16,10 @@
 //! produced opening id is dynamic in `has_address_phase`; the override computes
 //! exactly the formula value, so the clear path and BlindFold stay in sync.
 
-use jolt_claims::protocols::jolt::geometry::claim_reductions::advice::ram_val_check_advice_opening;
 use jolt_claims::protocols::jolt::geometry::claim_reductions::bytecode::{
     lane_weights, BytecodeLaneWeightInputs,
 };
 use jolt_claims::protocols::jolt::relations;
-pub use jolt_claims::protocols::jolt::relations::claim_reductions::advice::{
-    TrustedAdviceCyclePhaseInputClaims, TrustedAdviceCyclePhaseOutputClaims,
-    UntrustedAdviceCyclePhaseInputClaims, UntrustedAdviceCyclePhaseOutputClaims,
-};
 pub use jolt_claims::protocols::jolt::relations::claim_reductions::bytecode::{
     BytecodeReductionCyclePhaseChallenges, BytecodeReductionCyclePhaseInputClaims,
     BytecodeReductionCyclePhaseOutputClaims,
@@ -33,8 +28,8 @@ pub use jolt_claims::protocols::jolt::relations::claim_reductions::program_image
     ProgramImageReductionCyclePhaseInputClaims, ProgramImageReductionCyclePhaseOutputClaims,
 };
 use jolt_claims::protocols::jolt::{
-    AdviceClaimReductionLayout, BytecodeClaimReductionLayout, JoltAdviceKind, JoltRelationId,
-    PrecommittedReductionLayout, ProgramImageClaimReductionLayout,
+    BytecodeClaimReductionLayout, JoltRelationId, PrecommittedReductionLayout,
+    ProgramImageClaimReductionLayout,
 };
 use jolt_claims::{NoChallenges, SymbolicSumcheck};
 use jolt_field::JoltField;
@@ -43,230 +38,6 @@ use super::outputs::BytecodeReductionWeights;
 use crate::stages::relations::ConcreteSumcheck;
 use crate::stages::stage4::RamValCheckInitialEvaluation;
 use crate::VerifierError;
-
-/// Wire the consumed RAM value-check trusted-advice opening *value* off the RAM
-/// value-check initial evaluation. Clear-only. Errors if the RAM value-check
-/// produced no trusted-advice contribution (the reduction runs only when it did).
-pub fn trusted_advice_cycle_phase_input_values_from_upstream<F: JoltField>(
-    ram_val_check_init: &RamValCheckInitialEvaluation<F>,
-) -> Result<TrustedAdviceCyclePhaseInputClaims<F>, VerifierError> {
-    let trusted = ram_val_check_init
-        .advice_contribution(JoltAdviceKind::Trusted)
-        .map(|contribution| contribution.opening_value)
-        .ok_or(VerifierError::MissingOpeningClaim {
-            id: ram_val_check_advice_opening(JoltAdviceKind::Trusted),
-        })?;
-    Ok(TrustedAdviceCyclePhaseInputClaims { trusted })
-}
-
-/// Wire the consumed RAM value-check untrusted-advice opening *value*. Clear-only.
-pub fn untrusted_advice_cycle_phase_input_values_from_upstream<F: JoltField>(
-    ram_val_check_init: &RamValCheckInitialEvaluation<F>,
-) -> Result<UntrustedAdviceCyclePhaseInputClaims<F>, VerifierError> {
-    let untrusted = ram_val_check_init
-        .advice_contribution(JoltAdviceKind::Untrusted)
-        .map(|contribution| contribution.opening_value)
-        .ok_or(VerifierError::MissingOpeningClaim {
-            id: ram_val_check_advice_opening(JoltAdviceKind::Untrusted),
-        })?;
-    Ok(UntrustedAdviceCyclePhaseInputClaims { untrusted })
-}
-
-/// Wire the staged RAM value-check advice RAM-address *point* off the RAM
-/// value-check initial evaluation — the clear-only reference the advice
-/// `FinalScale` terms read. `None` when the RAM value-check produced no
-/// contribution of this kind.
-pub fn advice_reference_point_from_upstream<F: JoltField>(
-    ram_val_check_init: &RamValCheckInitialEvaluation<F>,
-    kind: JoltAdviceKind,
-) -> Option<Vec<F>> {
-    ram_val_check_init
-        .advice_contribution(kind)
-        .map(|contribution| contribution.opening_point.clone())
-}
-
-fn advice_public_failed(reason: impl ToString) -> VerifierError {
-    VerifierError::StageClaimPublicInputFailed {
-        stage: JoltRelationId::AdviceClaimReductionCyclePhase,
-        reason: reason.to_string(),
-    }
-}
-
-#[derive(Clone)]
-pub struct TrustedAdviceCyclePhase<F: JoltField> {
-    symbolic: relations::claim_reductions::advice::TrustedCyclePhase,
-    layout: AdviceClaimReductionLayout,
-    /// The RAM address point of the staged advice opening from RAM value-check;
-    /// the `FinalScale` public compares the produced opening point against it.
-    /// `None` in ZK, where `expected_output` (its only reader) never runs.
-    reference_opening_point: Option<Vec<F>>,
-}
-
-impl<F: JoltField> TrustedAdviceCyclePhase<F> {
-    pub fn new(
-        layout: &AdviceClaimReductionLayout,
-        reference_opening_point: Option<Vec<F>>,
-    ) -> Self {
-        Self {
-            symbolic: relations::claim_reductions::advice::TrustedCyclePhase::new(
-                layout.dimensions(),
-            ),
-            layout: layout.clone(),
-            reference_opening_point,
-        }
-    }
-
-    pub fn layout(&self) -> &AdviceClaimReductionLayout {
-        &self.layout
-    }
-
-    /// The staged RAM value-check advice point the kernel's eq table binds
-    /// against (`None` in ZK, where no clear kernel runs).
-    pub fn reference_opening_point(&self) -> Option<&[F]> {
-        self.reference_opening_point.as_deref()
-    }
-}
-
-impl<F: JoltField> ConcreteSumcheck<F> for TrustedAdviceCyclePhase<F> {
-    type Symbolic = relations::claim_reductions::advice::TrustedCyclePhase;
-
-    fn symbolic(&self) -> &Self::Symbolic {
-        &self.symbolic
-    }
-
-    /// Precommitted cycle-phase reductions are bound on the offset-0 prefix of
-    /// the batch challenge vector, not the front-loaded suffix.
-    fn instance_point_offset(&self, _batch_num_vars: usize) -> Result<usize, VerifierError> {
-        Ok(0)
-    }
-
-    fn derive_opening_points(
-        &self,
-        sumcheck_point: &[F],
-        _input_points: &TrustedAdviceCyclePhaseInputClaims<Vec<F>>,
-    ) -> Result<TrustedAdviceCyclePhaseOutputClaims<Vec<F>>, VerifierError> {
-        let opening_point = self
-            .layout
-            .cycle_phase_opening_point(sumcheck_point)
-            .map_err(advice_public_failed)?;
-        Ok(TrustedAdviceCyclePhaseOutputClaims {
-            trusted: opening_point,
-        })
-    }
-
-    fn expected_output(
-        &self,
-        _input_points: &TrustedAdviceCyclePhaseInputClaims<Vec<F>>,
-        output_values: &TrustedAdviceCyclePhaseOutputClaims<F>,
-        output_points: &TrustedAdviceCyclePhaseOutputClaims<Vec<F>>,
-        _challenges: &NoChallenges<F>,
-    ) -> Result<F, VerifierError> {
-        let value = output_values.trusted;
-        if self.layout.dimensions().has_address_phase() {
-            Ok(value)
-        } else {
-            let reference_opening_point =
-                self.reference_opening_point.as_ref().ok_or_else(|| {
-                    advice_public_failed("advice reference opening point unavailable")
-                })?;
-            let scale = self
-                .layout
-                .cycle_phase_scale_at_opening_point(
-                    reference_opening_point,
-                    output_points.trusted(),
-                )
-                .map_err(advice_public_failed)?;
-            Ok(scale * value)
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct UntrustedAdviceCyclePhase<F: JoltField> {
-    symbolic: relations::claim_reductions::advice::UntrustedCyclePhase,
-    layout: AdviceClaimReductionLayout,
-    /// The RAM address point of the staged advice opening from RAM value-check;
-    /// the `FinalScale` public compares the produced opening point against it.
-    /// `None` in ZK, where `expected_output` (its only reader) never runs.
-    reference_opening_point: Option<Vec<F>>,
-}
-
-impl<F: JoltField> UntrustedAdviceCyclePhase<F> {
-    pub fn new(
-        layout: &AdviceClaimReductionLayout,
-        reference_opening_point: Option<Vec<F>>,
-    ) -> Self {
-        Self {
-            symbolic: relations::claim_reductions::advice::UntrustedCyclePhase::new(
-                layout.dimensions(),
-            ),
-            layout: layout.clone(),
-            reference_opening_point,
-        }
-    }
-
-    pub fn layout(&self) -> &AdviceClaimReductionLayout {
-        &self.layout
-    }
-
-    /// The staged RAM value-check advice point the kernel's eq table binds
-    /// against (`None` in ZK, where no clear kernel runs).
-    pub fn reference_opening_point(&self) -> Option<&[F]> {
-        self.reference_opening_point.as_deref()
-    }
-}
-
-impl<F: JoltField> ConcreteSumcheck<F> for UntrustedAdviceCyclePhase<F> {
-    type Symbolic = relations::claim_reductions::advice::UntrustedCyclePhase;
-
-    fn symbolic(&self) -> &Self::Symbolic {
-        &self.symbolic
-    }
-
-    fn instance_point_offset(&self, _batch_num_vars: usize) -> Result<usize, VerifierError> {
-        Ok(0)
-    }
-
-    fn derive_opening_points(
-        &self,
-        sumcheck_point: &[F],
-        _input_points: &UntrustedAdviceCyclePhaseInputClaims<Vec<F>>,
-    ) -> Result<UntrustedAdviceCyclePhaseOutputClaims<Vec<F>>, VerifierError> {
-        let opening_point = self
-            .layout
-            .cycle_phase_opening_point(sumcheck_point)
-            .map_err(advice_public_failed)?;
-        Ok(UntrustedAdviceCyclePhaseOutputClaims {
-            untrusted: opening_point,
-        })
-    }
-
-    fn expected_output(
-        &self,
-        _input_points: &UntrustedAdviceCyclePhaseInputClaims<Vec<F>>,
-        output_values: &UntrustedAdviceCyclePhaseOutputClaims<F>,
-        output_points: &UntrustedAdviceCyclePhaseOutputClaims<Vec<F>>,
-        _challenges: &NoChallenges<F>,
-    ) -> Result<F, VerifierError> {
-        let value = output_values.untrusted;
-        if self.layout.dimensions().has_address_phase() {
-            Ok(value)
-        } else {
-            let reference_opening_point =
-                self.reference_opening_point.as_ref().ok_or_else(|| {
-                    advice_public_failed("advice reference opening point unavailable")
-                })?;
-            let scale = self
-                .layout
-                .cycle_phase_scale_at_opening_point(
-                    reference_opening_point,
-                    output_points.untrusted(),
-                )
-                .map_err(advice_public_failed)?;
-            Ok(scale * value)
-        }
-    }
-}
 
 /// Wire the consumed RAM value-check program-image contribution *value*.
 /// Clear-only.

@@ -66,7 +66,6 @@ use jolt_claims::{
                 self, BytecodeReadRafCommittedEvaluationInputs, BytecodeReadRafEvaluationInputs,
             },
             claim_reductions::{
-                advice,
                 bytecode::{self as bytecode_reduction},
                 hamming_weight, program_image,
             },
@@ -79,23 +78,22 @@ use jolt_claims::{
                 right_instruction_input_product, SpartanOuterDimensions, SpartanProductDimensions,
             },
         },
-        AdviceClaimReductionLayout, AdviceClaimReductionPublic, BooleanityChallenge,
-        BooleanityPublic, BytecodeClaimReductionChallenge, BytecodeClaimReductionLayout,
-        BytecodeClaimReductionPublic, BytecodeReadRafChallenge, BytecodeReadRafPublic,
-        HammingWeightClaimReductionChallenge, HammingWeightClaimReductionPublic,
-        IncClaimReductionChallenge, IncClaimReductionPublic, InstructionClaimReductionChallenge,
-        InstructionClaimReductionPublic, InstructionInputChallenge, InstructionInputPublic,
-        InstructionRaVirtualizationChallenge, InstructionRaVirtualizationPublic,
-        InstructionReadRafChallenge, InstructionReadRafPublic, JoltAdviceKind, JoltChallengeId,
-        JoltCommittedPolynomial, JoltDerivedId, JoltExpr, JoltOpeningId, JoltPolynomialId,
-        JoltRelationId, JoltVirtualPolynomial, PrecommittedReductionLayout,
+        BooleanityChallenge, BooleanityPublic, BytecodeClaimReductionChallenge,
+        BytecodeClaimReductionLayout, BytecodeClaimReductionPublic, BytecodeReadRafChallenge,
+        BytecodeReadRafPublic, HammingWeightClaimReductionChallenge,
+        HammingWeightClaimReductionPublic, IncClaimReductionChallenge, IncClaimReductionPublic,
+        InstructionClaimReductionChallenge, InstructionClaimReductionPublic,
+        InstructionInputChallenge, InstructionInputPublic, InstructionRaVirtualizationChallenge,
+        InstructionRaVirtualizationPublic, InstructionReadRafChallenge, InstructionReadRafPublic,
+        JoltChallengeId, JoltCommittedPolynomial, JoltDerivedId, JoltExpr, JoltOpeningId,
+        JoltPolynomialId, JoltRelationId, JoltVirtualPolynomial, PrecommittedReductionLayout,
         ProgramImageClaimReductionLayout, ProgramImageClaimReductionPublic,
         RamHammingBooleanityPublic, RamOutputCheckPublic, RamRaClaimReductionChallenge,
         RamRaClaimReductionPublic, RamRaVirtualizationPublic, RamRafEvaluationPublic,
         RamReadWriteChallenge, RamReadWritePublic, RamValCheckChallenge, RamValCheckPublic,
         RegistersClaimReductionChallenge, RegistersClaimReductionPublic,
         RegistersReadWriteChallenge, RegistersReadWritePublic, RegistersValEvaluationPublic,
-        SpartanShiftChallenge, SpartanShiftPublic,
+        SpartanShiftPublic,
     },
     Expr, OutputClaims, Source, SymbolicSumcheck, Term,
 };
@@ -446,20 +444,11 @@ where
     PCS: CommitmentScheme<Field = F>,
     VC: VectorCommitment<Field = F>,
 {
-    let r_address = ram_val_check_address(input)?;
     // WARNING: contribution order and selectors must stay in lockstep with the
     // clear-path decomposition in stage4/verify.rs.
     let mut contributions = Vec::new();
     if input.checked.precommitted.program_image.is_some() {
         contributions.push(ram::RamValCheckInitContribution::program_image(-F::one()));
-    }
-    if input.proof.untrusted_advice_commitment.is_some() {
-        let selector = advice_selector(input, JoltAdviceKind::Untrusted, &r_address)?;
-        contributions.push(ram::RamValCheckInitContribution::untrusted(-selector.0));
-    }
-    if input.checked.trusted_advice_commitment_present {
-        let selector = advice_selector(input, JoltAdviceKind::Trusted, &r_address)?;
-        contributions.push(ram::RamValCheckInitContribution::trusted(-selector.0));
     }
     Ok(ram::RamValCheckInit::decomposed(
         input.stage4.ram_val_check_public_eval,
@@ -485,46 +474,6 @@ where
             stage: JoltRelationId::RamValCheck,
             reason: "RAM read-write opening point is shorter than the RAM address".to_string(),
         })
-}
-
-fn advice_selector<PCS, VC, ZkProof>(
-    _input: &BlindFoldInputs<'_, PCS, VC, ZkProof>,
-    kind: JoltAdviceKind,
-    _r_address: &[PCS::Field],
-) -> Result<(PCS::Field, Vec<PCS::Field>), VerifierError>
-where
-    PCS: CommitmentScheme,
-    VC: VectorCommitment<Field = PCS::Field>,
-{
-    // The WASM layout has no advice regions; `validate_inputs` rejects advice
-    // commitments, so this is only reachable through an inconsistent proof.
-    Err(VerifierError::StageClaimPublicInputFailed {
-        stage: JoltRelationId::RamValCheck,
-        reason: format!("{kind:?} advice is not part of the WASM memory layout"),
-    })
-}
-
-fn advice_source_point<PCS, VC, ZkProof>(
-    input: &BlindFoldInputs<'_, PCS, VC, ZkProof>,
-    kind: JoltAdviceKind,
-) -> Result<Vec<PCS::Field>, VerifierError>
-where
-    PCS: CommitmentScheme,
-    VC: VectorCommitment<Field = PCS::Field>,
-{
-    let r_address = ram_val_check_address(input)?;
-    advice_selector(input, kind, &r_address).map(|(_, point)| point)
-}
-
-fn advice_layout<PCS, VC, ZkProof>(
-    input: &BlindFoldInputs<'_, PCS, VC, ZkProof>,
-    kind: JoltAdviceKind,
-) -> Option<AdviceClaimReductionLayout>
-where
-    PCS: CommitmentScheme,
-    VC: VectorCommitment<Field = PCS::Field>,
-{
-    input.checked.precommitted.advice(kind).cloned()
 }
 
 #[expect(
@@ -1035,67 +984,6 @@ where
         .map_err(|error| public_error(JoltRelationId::ProgramImageClaimReduction, error))?;
     values.public(
         JoltDerivedId::from(ProgramImageClaimReductionPublic::FinalScale),
-        scale,
-    )
-}
-
-fn add_advice_cycle_publics<PCS, VC, ZkProof>(
-    input: &BlindFoldInputs<'_, PCS, VC, ZkProof>,
-    values: &mut SourceValues<PCS::Field>,
-    layout: &AdviceClaimReductionLayout,
-    kind: JoltAdviceKind,
-) -> Result<(), VerifierError>
-where
-    PCS: CommitmentScheme,
-    VC: VectorCommitment<Field = PCS::Field>,
-{
-    // The cycle-phase relation references `FinalScale` only when the reduction
-    // finalizes at the cycle-phase handoff; otherwise the stage 7 address
-    // phase supplies it.
-    if layout.dimensions().has_address_phase() {
-        return Ok(());
-    }
-    let opening_point = input
-        .stage6b
-        .output_points
-        .advice_cycle_phase_opening_point(kind)
-        .ok_or_else(|| VerifierError::MissingOpeningClaim {
-            id: advice::cycle_phase_advice_opening(kind),
-        })?;
-    let source_point = advice_source_point(input, kind)?;
-    let scale = layout
-        .cycle_phase_scale_at_opening_point(&source_point, opening_point)
-        .map_err(|error| public_error(JoltRelationId::AdviceClaimReductionCyclePhase, error))?;
-    values.public(
-        JoltDerivedId::from(AdviceClaimReductionPublic::FinalScale(kind)),
-        scale,
-    )
-}
-
-fn add_advice_address_publics<PCS, VC, ZkProof>(
-    input: &BlindFoldInputs<'_, PCS, VC, ZkProof>,
-    values: &mut SourceValues<PCS::Field>,
-    layout: &AdviceClaimReductionLayout,
-    kind: JoltAdviceKind,
-    sumcheck_point: &[PCS::Field],
-) -> Result<(), VerifierError>
-where
-    PCS: CommitmentScheme,
-    VC: VectorCommitment<Field = PCS::Field>,
-{
-    let source_point = advice_source_point(input, kind)?;
-    let cycle_phase_variables = input
-        .stage6b
-        .output_points
-        .advice_cycle_phase_variables(kind)
-        .ok_or_else(|| VerifierError::MissingOpeningClaim {
-            id: advice::cycle_phase_advice_opening(kind),
-        })?;
-    let scale = layout
-        .address_phase_final_output_scale(&source_point, &cycle_phase_variables, sumcheck_point)
-        .map_err(|error| public_error(JoltRelationId::AdviceClaimReduction, error))?;
-    values.public(
-        JoltDerivedId::from(AdviceClaimReductionPublic::FinalScale(kind)),
         scale,
     )
 }

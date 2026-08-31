@@ -440,7 +440,7 @@ mod tests {
         total: C,
         // The dual-role cell: consumed here and re-staged on
         // `ToyOutputs::untrusted` via the shared-id inference.
-        #[opening(untrusted_advice, from = RegistersValEvaluation)]
+        #[opening(ProgramImageInitContributionRw, from = RegistersValEvaluation)]
         untrusted: Option<C>,
     }
 
@@ -455,7 +455,7 @@ mod tests {
         instruction_ra: Vec<C>,
         #[opening(RightLookupOperand)]
         c: C,
-        #[opening(untrusted_advice)]
+        #[opening(ProgramImageInitContributionRw)]
         untrusted: Option<C>,
     }
 
@@ -685,7 +685,10 @@ mod tests {
                 virt(JoltVirtualPolynomial::InstructionRa(0)),
                 virt(JoltVirtualPolynomial::InstructionRa(1)),
                 virt(JoltVirtualPolynomial::RightLookupOperand),
-                JoltOpeningId::untrusted_advice(TOY_RELATION),
+                JoltOpeningId::virtual_polynomial(
+                    jolt_claims::protocols::jolt::JoltVirtualPolynomial::ProgramImageInitContributionRw,
+                    TOY_RELATION,
+                ),
             ],
         );
 
@@ -863,7 +866,10 @@ mod tests {
     fn construction_rejects_table_for_consumed_id() {
         let challenges =
             ToyChallenges::from_transcript_values([Fr::from_u64(5)].into_iter()).unwrap();
-        let advice_id = JoltOpeningId::untrusted_advice(TOY_RELATION);
+        let advice_id = JoltOpeningId::virtual_polynomial(
+            jolt_claims::protocols::jolt::JoltVirtualPolynomial::ProgramImageInitContributionRw,
+            TOY_RELATION,
+        );
         let claims = ToyInputs {
             total: Fr::from_u64(0),
             untrusted: Some(Fr::from_u64(4242)),

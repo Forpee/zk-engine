@@ -134,17 +134,8 @@ where
         self.hamming_weight_claim_reduction = Box::new(OptimizedHammingWeightClaimReduction);
         self.inc_claim_reduction = Box::new(OptimizedIncClaimReduction);
 
-        self.trusted_advice_cycle = Box::new(OptimizedPrecommittedCycle);
-        self.untrusted_advice_cycle = Box::new(OptimizedPrecommittedCycle);
         self.bytecode_reduction_cycle = Box::new(OptimizedPrecommittedCycle);
         self.program_image_reduction_cycle = Box::new(OptimizedPrecommittedCycle);
-        self.advice_opening = Box::new(OptimizedPrecommittedCycle);
-        self.trusted_advice_address = Box::new(OptimizedPrecommittedAddress::new(
-            "stage 6b parked no trusted-advice reduction state for the scheduled address phase",
-        ));
-        self.untrusted_advice_address = Box::new(OptimizedPrecommittedAddress::new(
-            "stage 6b parked no untrusted-advice reduction state for the scheduled address phase",
-        ));
         self.bytecode_reduction_address = Box::new(OptimizedPrecommittedAddress::new(
             "stage 6b parked no bytecode reduction state for the scheduled address phase",
         ));

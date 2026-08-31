@@ -1,20 +1,18 @@
 //! Resolving the final openings of the precommitted polynomials for stage 8.
 //!
-//! Each precommitted claim reduction (advice, committed bytecode, program image)
+//! Each precommitted claim reduction (committed bytecode, program image)
 //! is completed either by stage 7's address phase or by the stage 6b cycle phase
 //! (whichever ran the last round). Stage 8 consumes the resolved openings as the
 //! anchors and batch members of the final PCS opening, so the resolution happens
 //! here, next to that consumer, before any stage-8 transcript operation.
 
 use jolt_claims::protocols::jolt::geometry::claim_reductions::{
-    advice,
     bytecode::{self as bytecode_reduction},
     program_image,
 };
 use jolt_claims::protocols::jolt::{
-    AdviceClaimReductionLayout, BytecodeClaimReductionLayout, JoltAdviceKind,
-    JoltCommittedPolynomial, JoltRelationId, PrecommittedReductionLayout,
-    ProgramImageClaimReductionLayout,
+    BytecodeClaimReductionLayout, JoltCommittedPolynomial, JoltRelationId,
+    PrecommittedReductionLayout, ProgramImageClaimReductionLayout,
 };
 use jolt_field::JoltField;
 
@@ -36,7 +34,7 @@ pub struct PrecommittedFinalOpening<F: JoltField> {
 }
 
 /// Opening point and (clear-mode) claim payload recorded by the stage that
-/// completed a precommitted claim reduction. `T` is a single claim for advice and
+/// completed a precommitted claim reduction. `T` is a single claim for the
 /// the program image, and the per-chunk claim slice for the committed bytecode.
 struct PrecommittedFinalSource<'a, F, T = F> {
     point: &'a [F],
@@ -64,8 +62,8 @@ impl<'a, F, T> PrecommittedFinalSource<'a, F, T> {
 /// clear values off the stage-7 output claims) or the stage 6b cycle phase (points
 /// off `stage6_points`, clear values off the stage-6b output claims). In ZK every
 /// opening claim stays committed (`None`) and only points are read; in clear mode a
-/// source requires both its point and its value. The walk order — trusted advice,
-/// untrusted advice, bytecode chunks, program image — fixes stage 8's anchor order.
+/// source requires both its point and its value. The walk order — bytecode
+/// chunks, then program image — fixes stage 8's anchor order.
 pub fn precommitted_final_openings<F: JoltField>(
     schedule: &PrecommittedSchedule,
     stage7_points: &Stage7OutputPoints<F>,
@@ -74,31 +72,6 @@ pub fn precommitted_final_openings<F: JoltField>(
 ) -> Result<Vec<PrecommittedFinalOpening<F>>, VerifierError> {
     let is_clear = clear.is_some();
     let mut openings = Vec::new();
-    for (kind, layout) in [
-        (JoltAdviceKind::Trusted, schedule.trusted_advice.as_ref()),
-        (
-            JoltAdviceKind::Untrusted,
-            schedule.untrusted_advice.as_ref(),
-        ),
-    ] {
-        if let Some(layout) = layout {
-            let address_value = clear.and_then(|(stage7, _)| advice_address_value(stage7, kind));
-            let address_phase =
-                resolve_source(is_clear, stage7_points.advice_point(kind), address_value);
-            let cycle_value = clear.and_then(|(_, stage6)| stage6.advice_cycle_phase_claim(kind));
-            let cycle_phase = resolve_source(
-                is_clear,
-                stage6_points.advice_cycle_phase_opening_point(kind),
-                cycle_value,
-            );
-            openings.push(advice_final_opening(
-                kind,
-                layout,
-                address_phase,
-                cycle_phase,
-            )?);
-        }
-    }
     if let Some(layout) = schedule.bytecode.as_ref() {
         let address_value = clear.and_then(|(stage7, _)| {
             stage7
@@ -170,49 +143,6 @@ fn resolve_source<F: JoltField, T>(
         } else {
             Some(PrecommittedFinalSource::zk(point))
         }
-    })
-}
-
-/// The stage-7 advice address-phase output *value* for `kind` (only that kind's
-/// slot is filled on the wire).
-fn advice_address_value<F: JoltField>(
-    claims: &Stage7OutputClaims<F>,
-    kind: JoltAdviceKind,
-) -> Option<F> {
-    match kind {
-        JoltAdviceKind::Trusted => claims.trusted_advice.as_ref().map(|claims| claims.trusted),
-        JoltAdviceKind::Untrusted => claims
-            .untrusted_advice
-            .as_ref()
-            .map(|claims| claims.untrusted),
-    }
-}
-
-/// Resolves the final opening of an advice polynomial from whichever phase
-/// completed its reduction: this stage's address phase, or the stage 6b cycle
-/// phase when no active address rounds remain.
-fn advice_final_opening<F: JoltField>(
-    kind: JoltAdviceKind,
-    layout: &AdviceClaimReductionLayout,
-    address_phase: Option<PrecommittedFinalSource<'_, F>>,
-    cycle_phase: Option<PrecommittedFinalSource<'_, F>>,
-) -> Result<PrecommittedFinalOpening<F>, VerifierError> {
-    let source = if layout.dimensions().has_address_phase() {
-        address_phase
-    } else {
-        cycle_phase
-    };
-    let source = source.ok_or(VerifierError::MissingOpeningClaim {
-        id: advice::final_advice_opening(kind),
-    })?;
-    let polynomial = match kind {
-        JoltAdviceKind::Trusted => JoltCommittedPolynomial::TrustedAdvice,
-        JoltAdviceKind::Untrusted => JoltCommittedPolynomial::UntrustedAdvice,
-    };
-    Ok(PrecommittedFinalOpening {
-        polynomial,
-        point: source.point.to_vec(),
-        opening_claim: source.opening_claim,
     })
 }
 

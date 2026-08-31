@@ -1,8 +1,8 @@
 //! Stage 7: the Hamming-weight claim-reduction batch plus the present
-//! precommitted address phases (advice, committed bytecode, program image).
+//! precommitted address phases (committed bytecode, program image).
 //!
 //! Pure orchestration mirroring `stage7::verify`: the whole batch is the
-//! verifier's own promoted `build_stage7_sumchecks` (an advice address phase
+//! verifier's own promoted `build_stage7_sumchecks` (an address phase
 //! is present exactly when its layout is committed AND its schedule has
 //! active address rounds), the challenges come from the generated
 //! declaration-order draw, and the inputs from the promoted

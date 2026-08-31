@@ -30,16 +30,12 @@ pub enum JoltRelationId {
     RegistersValEvaluation,
     BytecodeReadRaf,
     Booleanity,
-    AdviceClaimReductionCyclePhase,
-    AdviceClaimReduction,
     BytecodeClaimReductionCyclePhase,
     BytecodeClaimReduction,
     ProgramImageClaimReductionCyclePhase,
     ProgramImageClaimReduction,
     IncClaimReduction,
     HammingWeightClaimReduction,
-    UntrustedAdviceReconstruction,
-    TrustedAdviceReconstruction,
     ProgramImageReconstruction,
     BytecodeChunkReconstruction,
 }
@@ -65,9 +61,6 @@ pub enum RamValCheckPublic {
     /// `Val_init(r_address)`'s public portion — the part of the initial RAM
     /// evaluation not carried by committed advice / program-image openings.
     InitEval,
-    /// The negated block selector (`-selector`) weighting one committed advice
-    /// contribution (`untrusted`/`trusted`) in the `Val_init` decomposition.
-    InitSelector(JoltAdviceKind),
     /// The negated selector (`-1`) weighting the committed program-image
     /// contribution in the `Val_init` decomposition (committed program mode).
     InitSelectorProgramImage,
@@ -171,18 +164,6 @@ pub enum BytecodeReadRafPublic {
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "allocative", derive(::allocative::Allocative))]
-pub enum JoltAdviceKind {
-    Trusted,
-    Untrusted,
-}
-
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum AdviceClaimReductionPublic {
-    FinalScale(JoltAdviceKind),
-}
-
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum BytecodeClaimReductionChallenge {
     Eta,
 }
@@ -200,14 +181,8 @@ pub enum ProgramImageClaimReductionPublic {
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum SpartanShiftChallenge {
-    Gamma,
-}
-
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SpartanShiftPublic {
     EqPlusOneOuter,
-    EqPlusOneProduct,
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
@@ -300,38 +275,6 @@ pub enum InstructionRaVirtualizationPublic {
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum UntrustedAdviceReconstructionChallenge {
-    Gamma,
-}
-
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum UntrustedAdviceReconstructionPublic {
-    /// `eq` over the full `(byte ‖ place ‖ word)` domain at the bound point —
-    /// weights the booleanity leg.
-    EqBytePlaceWord,
-    /// `eq` over the `(place ‖ word)` sub-domain at the bound point — weights
-    /// the per-byte-place hamming leg (byte variables are summed, not
-    /// eq-bound).
-    EqPlaceWord,
-    /// The [`byte_decode_weight`](crate::protocols::jolt::lattice::geometry::byte_decode_weight)
-    /// evaluation at the bound `(byte ‖ place)` coordinates — decodes the
-    /// one-hot entries into the little-endian word value.
-    ByteDecode,
-    /// `eq` of the bound word coordinates against the advice claim
-    /// reduction's word point — reduces the incoming word claim to this
-    /// relation's bound point.
-    EqWord,
-}
-
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum TrustedAdviceReconstructionPublic {
-    /// The [`byte_decode_weight`](crate::protocols::jolt::lattice::geometry::byte_decode_weight)
-    /// evaluation at the bound `(byte ‖ place)` coordinates (the word point
-    /// is fixed by the incoming claim, so no `eq` derived is needed).
-    ByteDecode,
-}
-
-#[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ProgramImageReconstructionPublic {
     /// The [`byte_decode_weight`](crate::protocols::jolt::lattice::geometry::byte_decode_weight)
     /// evaluation at the bound `(byte ‖ place)` coordinates (the word point
@@ -375,14 +318,12 @@ pub enum JoltChallengeId {
     HammingWeightClaimReduction(HammingWeightClaimReductionChallenge),
     BytecodeReadRaf(BytecodeReadRafChallenge),
     BytecodeClaimReduction(BytecodeClaimReductionChallenge),
-    SpartanShift(SpartanShiftChallenge),
     RegistersReadWrite(RegistersReadWriteChallenge),
     RegistersClaimReduction(RegistersClaimReductionChallenge),
     InstructionClaimReduction(InstructionClaimReductionChallenge),
     InstructionInput(InstructionInputChallenge),
     InstructionReadRaf(InstructionReadRafChallenge),
     InstructionRaVirtualization(InstructionRaVirtualizationChallenge),
-    UntrustedAdviceReconstruction(UntrustedAdviceReconstructionChallenge),
     BytecodeChunkReconstruction(BytecodeChunkReconstructionChallenge),
 }
 
@@ -408,15 +349,11 @@ pub enum JoltCommittedPolynomial {
     BytecodeRa(usize),
     BytecodeChunk(usize),
     RamRa(usize),
-    TrustedAdvice,
-    UntrustedAdvice,
     ProgramImageInit,
     // Lattice-mode committed polynomials (slots of the packed witness); base
     // mode never constructs these. Appended for codec stability.
     BalancedIncDigit(usize),
     BalancedIncCarry,
-    TrustedAdviceBytes,
-    UntrustedAdviceBytes,
     // Lattice-mode precommitted bytecode decompositions: the per-lane one-hot /
     // flag / byte decompositions of `BytecodeChunk(chunk)`, plus the program
     // image byte encoding. Their claims are produced by the reconstruction
@@ -446,15 +383,6 @@ pub enum JoltCommittedPolynomial {
         chunk: usize,
     },
     ProgramImageBytes,
-}
-
-impl JoltCommittedPolynomial {
-    pub fn advice_bytes(kind: JoltAdviceKind) -> Self {
-        match kind {
-            JoltAdviceKind::Trusted => Self::TrustedAdviceBytes,
-            JoltAdviceKind::Untrusted => Self::UntrustedAdviceBytes,
-        }
-    }
 }
 
 #[derive(Hash, PartialEq, Eq, Copy, Clone, Debug, PartialOrd, Ord, Serialize, Deserialize)]
@@ -519,26 +447,13 @@ pub enum JoltOpeningId {
         polynomial: JoltPolynomialId,
         relation: JoltRelationId,
     },
-    UntrustedAdvice {
-        relation: JoltRelationId,
-    },
-    TrustedAdvice {
-        relation: JoltRelationId,
-    },
 }
 
 impl JoltOpeningId {
-    /// The polynomial this opening refers to; advice openings resolve to
-    /// their committed advice polynomials.
+    /// The polynomial this opening refers to.
     pub const fn polynomial_id(self) -> JoltPolynomialId {
         match self {
             Self::Polynomial { polynomial, .. } => polynomial,
-            Self::TrustedAdvice { .. } => {
-                JoltPolynomialId::Committed(JoltCommittedPolynomial::TrustedAdvice)
-            }
-            Self::UntrustedAdvice { .. } => {
-                JoltPolynomialId::Committed(JoltCommittedPolynomial::UntrustedAdvice)
-            }
         }
     }
 
@@ -555,14 +470,6 @@ impl JoltOpeningId {
 
     pub fn virtual_polynomial(polynomial: JoltVirtualPolynomial, relation: JoltRelationId) -> Self {
         Self::polynomial(polynomial, relation)
-    }
-
-    pub fn untrusted_advice(relation: JoltRelationId) -> Self {
-        Self::UntrustedAdvice { relation }
-    }
-
-    pub fn trusted_advice(relation: JoltRelationId) -> Self {
-        Self::TrustedAdvice { relation }
     }
 }
 
@@ -581,7 +488,6 @@ pub enum JoltDerivedId {
     IncClaimReduction(IncClaimReductionPublic),
     HammingWeightClaimReduction(HammingWeightClaimReductionPublic),
     BytecodeReadRaf(BytecodeReadRafPublic),
-    AdviceClaimReduction(AdviceClaimReductionPublic),
     BytecodeClaimReduction(BytecodeClaimReductionPublic),
     ProgramImageClaimReduction(ProgramImageClaimReductionPublic),
     SpartanShift(SpartanShiftPublic),
@@ -594,8 +500,6 @@ pub enum JoltDerivedId {
     InstructionInput(InstructionInputPublic),
     InstructionReadRaf(InstructionReadRafPublic),
     InstructionRaVirtualization(InstructionRaVirtualizationPublic),
-    UntrustedAdviceReconstruction(UntrustedAdviceReconstructionPublic),
-    TrustedAdviceReconstruction(TrustedAdviceReconstructionPublic),
     ProgramImageReconstruction(ProgramImageReconstructionPublic),
     BytecodeChunkReconstruction(BytecodeChunkReconstructionPublic),
     /// Test-only derived id for toy relations that define their own

@@ -1,4 +1,3 @@
-pub mod advice;
 pub mod bytecode;
 pub mod hamming_weight;
 pub mod increments;

@@ -146,11 +146,6 @@ pub const UNISKIP_SEAM_SPANS: [&str; 4] = [
     "SpartanProductUniskip::first_round_poly",
 ];
 
-/// Kernel-seam spans that fire only on proves whose guest consumes advice.
-/// Call-boundary spans like [`KERNEL_SEAM_SPANS`]; exempt from the smoke
-/// test's presence assertion (fibonacci has no advice).
-pub const ADVICE_SEAM_SPANS: [&str; 2] = ["commit_advice", "AdviceOpeningEvaluation::evaluate"];
-
 /// Kernel-seam spans that fire only with committed-program preprocessing.
 pub const COMMITTED_PROGRAM_SEAM_SPANS: [&str; 1] = ["build_committed_bytecode_chunk_coeffs"];
 

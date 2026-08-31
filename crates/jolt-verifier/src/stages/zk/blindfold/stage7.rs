@@ -17,18 +17,6 @@ where
     );
     let hamming_claims =
         relations::claim_reductions::hamming_weight::ClaimReduction::new(hamming_dimensions);
-    let trusted_layout = advice_layout(input, JoltAdviceKind::Trusted);
-    let trusted_claims = trusted_layout.as_ref().and_then(|layout| {
-        layout.dimensions().has_address_phase().then(|| {
-            relations::claim_reductions::advice::TrustedAddressPhase::new(layout.dimensions())
-        })
-    });
-    let untrusted_layout = advice_layout(input, JoltAdviceKind::Untrusted);
-    let untrusted_claims = untrusted_layout.as_ref().and_then(|layout| {
-        layout.dimensions().has_address_phase().then(|| {
-            relations::claim_reductions::advice::UntrustedAddressPhase::new(layout.dimensions())
-        })
-    });
     let bytecode_reduction_layout = input.checked.precommitted.bytecode.clone();
     let program_image_reduction_layout = input.checked.precommitted.program_image.clone();
     let bytecode_reduction_claims = bytecode_reduction_layout.as_ref().and_then(|layout| {
@@ -97,14 +85,6 @@ where
             .try_instance_point_at(0, rounds)
             .map_err(|error| stage_sumcheck_error(stage, error))
     };
-    if let (Some(layout), Some(claim)) = (trusted_layout.as_ref(), trusted_claims.as_ref()) {
-        let point = address_phase_point(claim.rounds(), JoltRelationId::AdviceClaimReduction)?;
-        add_advice_address_publics(input, values, layout, JoltAdviceKind::Trusted, &point)?;
-    }
-    if let (Some(layout), Some(claim)) = (untrusted_layout.as_ref(), untrusted_claims.as_ref()) {
-        let point = address_phase_point(claim.rounds(), JoltRelationId::AdviceClaimReduction)?;
-        add_advice_address_publics(input, values, layout, JoltAdviceKind::Untrusted, &point)?;
-    }
     if let (Some(layout), Some(claim)) = (
         bytecode_reduction_layout.as_ref(),
         bytecode_reduction_claims.as_ref(),
@@ -124,14 +104,6 @@ where
     let output_openings = hamming_weight::claim_reduction_output_openings(hamming_dimensions);
     let mut output_ids = output_openings.all();
     let mut claims = vec![relation_claim(&hamming_claims)];
-    if let Some(claim) = trusted_claims {
-        claims.push(relation_claim(&claim));
-        output_ids.push(advice::final_advice_opening(JoltAdviceKind::Trusted));
-    }
-    if let Some(claim) = untrusted_claims {
-        claims.push(relation_claim(&claim));
-        output_ids.push(advice::final_advice_opening(JoltAdviceKind::Untrusted));
-    }
     if let (Some(layout), Some(claim)) = (
         bytecode_reduction_layout.as_ref(),
         bytecode_reduction_claims,

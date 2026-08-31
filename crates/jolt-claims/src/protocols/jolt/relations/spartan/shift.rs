@@ -4,10 +4,8 @@ use jolt_field::Ring;
 use serde::{Deserialize, Serialize};
 
 use crate::protocols::jolt::geometry::spartan::{next_pc_outer, pc_shift, SHIFT_DEGREE};
-use crate::protocols::jolt::{
-    JoltExpr, JoltRelationId, SpartanShiftChallenge, SpartanShiftPublic, TraceDimensions,
-};
-use crate::{derived, opening, InputClaims, OutputClaims, SumcheckChallenges, SymbolicSumcheck};
+use crate::protocols::jolt::{JoltExpr, JoltRelationId, SpartanShiftPublic, TraceDimensions};
+use crate::{derived, opening, InputClaims, OutputClaims, SymbolicSumcheck};
 
 /// Produced Spartan shift openings (the shifted unexpanded-PC / PC / virtual /
 /// first-in-sequence / noop columns), all sharing the single shift opening point.
@@ -33,18 +31,9 @@ pub struct SpartanShiftInputClaims<C> {
     pub next_pc: C,
 }
 
-/// Fiat-Shamir challenge drawn by the Spartan shift sumcheck.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, SumcheckChallenges)]
-#[cfg_attr(feature = "allocative", derive(::allocative::Allocative))]
-pub struct SpartanShiftChallenges<F> {
-    #[challenge(SpartanShiftChallenge::Gamma)]
-    pub gamma: F,
-}
-
-/// The Spartan shift sumcheck: relates each `Next*` column from the outer
-/// sumcheck (and `next_is_noop` from the product remainder) to the shifted
-/// column at the same cycle, folded by `gamma` and weighted by the `EqPlusOne`
-/// publics.
+/// The Spartan shift sumcheck: relates the outer sumcheck's `NextPC` column
+/// to the shifted `PC` column at the same cycle, weighted by the
+/// `EqPlusOneOuter` public.
 #[derive(Clone)]
 pub struct Shift {
     shape: TraceDimensions,
@@ -56,7 +45,7 @@ impl SymbolicSumcheck for Shift {
     type DerivedId = crate::protocols::jolt::JoltDerivedId;
     type ChallengeId = crate::protocols::jolt::JoltChallengeId;
     type Shape = TraceDimensions;
-    type Challenges<F> = SpartanShiftChallenges<F>;
+    type Challenges<F> = crate::NoChallenges<F>;
     type Inputs<C> = SpartanShiftInputClaims<C>;
     type Outputs<C> = SpartanShiftOutputClaims<C>;
 
@@ -88,7 +77,7 @@ impl SymbolicSumcheck for Shift {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocols::jolt::{JoltChallengeId, JoltDerivedId};
+    use crate::protocols::jolt::JoltDerivedId;
     use jolt_field::{Fr, Ring};
 
     #[test]
@@ -97,7 +86,6 @@ mod tests {
 
         let next_pc = Fr::from_u64(5);
         let pc = Fr::from_u64(19);
-        let gamma = Fr::from_u64(37);
         let eq_outer = Fr::from_u64(41);
         let zero = Fr::from_u64(0);
 
@@ -106,10 +94,7 @@ mod tests {
                 id if id == next_pc_outer() => next_pc,
                 _ => zero,
             },
-            |id| match *id {
-                JoltChallengeId::SpartanShift(SpartanShiftChallenge::Gamma) => gamma,
-                _ => zero,
-            },
+            |_| zero,
             |_| zero,
         );
         let output = relation.output_expression::<Fr>().evaluate(
@@ -117,10 +102,7 @@ mod tests {
                 id if id == pc_shift() => pc,
                 _ => zero,
             },
-            |id| match *id {
-                JoltChallengeId::SpartanShift(SpartanShiftChallenge::Gamma) => gamma,
-                _ => zero,
-            },
+            |_| zero,
             |id| match *id {
                 JoltDerivedId::SpartanShift(SpartanShiftPublic::EqPlusOneOuter) => eq_outer,
                 _ => zero,

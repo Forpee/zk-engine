@@ -68,7 +68,7 @@ where
         .to_vec();
 
     let sumchecks = Stage3Sumchecks {
-        shift: SpartanShift::new(dimensions, tau_low.clone(), product_remainder_point.clone()),
+        shift: SpartanShift::new(dimensions, tau_low.clone()),
         instruction_input: InstructionInput::new(dimensions, product_remainder_point),
         registers_claim_reduction: RegistersClaimReduction::new(dimensions, tau_low),
     };

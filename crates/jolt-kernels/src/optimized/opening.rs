@@ -147,15 +147,12 @@ impl<F: JoltField> JointOpeningPolynomials<F> for OptimizedBackend {
 }
 
 /// Whether `polynomial` embeds as its own balanced matrix in the grid's
-/// top-left block (advice and committed-program polynomials) rather than by
-/// the trace placement.
+/// top-left block (the committed-program polynomials) rather than by the
+/// trace placement.
 const fn is_block_embedded(polynomial: JoltCommittedPolynomial) -> bool {
     matches!(
         polynomial,
-        JoltCommittedPolynomial::TrustedAdvice
-            | JoltCommittedPolynomial::UntrustedAdvice
-            | JoltCommittedPolynomial::BytecodeChunk(_)
-            | JoltCommittedPolynomial::ProgramImageInit
+        JoltCommittedPolynomial::BytecodeChunk(_) | JoltCommittedPolynomial::ProgramImageInit
     )
 }
 

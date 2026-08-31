@@ -32,9 +32,6 @@ where
         formula_dimensions.instruction_ra_virtualization,
     );
     let inc_claims = relations::claim_reductions::increments::ClaimReduction::new(trace_dimensions);
-    let trusted_layout = input.checked.precommitted.advice(JoltAdviceKind::Trusted);
-    let untrusted_layout = input.checked.precommitted.advice(JoltAdviceKind::Untrusted);
-
     // The cycle bytecode round count is needed by the shared publics helper; the
     // committed and uncommitted cycle-phase relations are distinct types, so pick
     // the active one's rounds here.
@@ -64,12 +61,6 @@ where
         instruction_ra_claims.rounds(),
         inc_claims.rounds(),
     )?;
-    if let Some(layout) = trusted_layout {
-        add_advice_cycle_publics(input, values, layout, JoltAdviceKind::Trusted)?;
-    }
-    if let Some(layout) = untrusted_layout {
-        add_advice_cycle_publics(input, values, layout, JoltAdviceKind::Untrusted)?;
-    }
     if let Some(layout) = bytecode_reduction_layout.as_ref() {
         let eta = input
             .stage6b

@@ -3,12 +3,10 @@
 //!
 //! Pure orchestration mirroring `stage4::verify`: the `Val_init`
 //! decomposition (public initial-RAM evaluation + init structure) is built
-//! with the verifier's own promoted helpers; the advice blocks' opening
-//! VALUES are the prover-only work (the advice polynomial evaluated at each
-//! block's address sub-point, staged transcript-silently before the RAM
+//! with the verifier's own promoted helpers, staged transcript-silently before the RAM
 //! value-check gamma draw). The stage's one curated behavior: the batch
 //! carries `no_opening_values`, so the final absorbs use the claims struct's
-//! hand-ordered `opening_values()` (staged advice/program-image openings
+//! hand-ordered `opening_values()` (the staged program-image opening
 //! first, then registers, then RAM).
 
 use jolt_claims::protocols::jolt::geometry::dimensions::REGISTER_ADDRESS_BITS;
@@ -32,7 +30,6 @@ use jolt_verifier::stages::stage4::registers_read_write_checking::RegistersReadW
 use jolt_verifier::stages::stage4::{
     public_initial_ram_evaluation, ram_val_check_init_structure, stage4_input_points_from_upstream,
     stage4_input_values_from_upstream, RamValCheckInitialEvaluation,
-    VerifiedRamValCheckAdviceContribution,
 };
 use jolt_verifier::{CheckedInputs, VerifierError};
 use jolt_witness::JoltWitnessPlane;
@@ -100,11 +97,7 @@ where
     }
 
     let public_eval = public_initial_ram_evaluation(checked, &preprocessing.verifier, r_address)?;
-    // The WASM layout has no advice regions (`validate_inputs` rejects advice
-    // commitments), so the init structure never carries an advice block.
-    let untrusted_advice_present = false;
-    let init_structure =
-        ram_val_check_init_structure(checked, untrusted_advice_present, r_address, public_eval)?;
+    let init_structure = ram_val_check_init_structure(checked, r_address, public_eval)?;
     // The committed program-image contribution: the image words' block MLE at
     // the RAM address point (the public initial-RAM evaluation switched to
     // inputs-only above, so this staged opening carries the image's share).
@@ -128,39 +121,9 @@ where
             Ok::<_, ProverError<F>>((point.clone(), value))
         })
         .transpose()?;
-    // The advice blocks' opening values: each advice polynomial evaluated at
-    // its block's address sub-point. Staged before the RAM value-check gamma
-    // draw, exactly as legacy's `prover_accumulate_advice` — transcript-silent
-    // on this branch (the claims flush with the stage-4 batch openings).
-    let advice_contributions = init_structure
-        .advice_blocks
-        .iter()
-        .map(|(kind, block)| {
-            // Backend-neutral kernel-seam span at the call boundary — see
-            // the taxonomy's kernel-seam contract.
-            let opening_value =
-                tracing::info_span!("AdviceOpeningEvaluation::evaluate", kind = ?kind).in_scope(
-                    || {
-                        backend.advice_opening.evaluate(
-                            session,
-                            *kind,
-                            &block.opening_point,
-                            witness,
-                        )
-                    },
-                )?;
-            Ok(VerifiedRamValCheckAdviceContribution {
-                kind: *kind,
-                selector: block.selector,
-                opening_point: block.opening_point.clone(),
-                opening_value,
-            })
-        })
-        .collect::<Result<Vec<_>, ProverError<F>>>()?;
     let ram_val_check_init = RamValCheckInitialEvaluation {
         public_eval,
         program_image_contribution,
-        advice_contributions,
     };
 
     let sumchecks = Stage4Sumchecks {
@@ -183,7 +146,7 @@ where
         &init_structure,
     );
 
-    // No curation hook: the staged advice/program-image openings ride in from
+    // No curation hook: the staged program-image opening rides in from
     // the RAM value-check kernel (captured off its own consumed input claims
     // at prepare), and the stage's `no_opening_values` absorb order is the
     // batch's hand-written `opening_values` replacement (staged openings

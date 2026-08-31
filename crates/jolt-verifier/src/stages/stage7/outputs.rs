@@ -1,22 +1,20 @@
 //! Typed inputs consumed and outputs produced by stage 7 verification.
 
-use jolt_claims::protocols::jolt::JoltAdviceKind;
 use jolt_field::JoltField;
 use jolt_sumcheck::BatchedCommittedSumcheckConsistency;
 
 use crate::stages::relations::SumcheckBatch;
 use crate::stages::zk::outputs::CommittedOutputClaimOutput;
 
-use super::advice_address_phase::{TrustedAdviceAddressPhase, UntrustedAdviceAddressPhase};
 use super::committed_reduction_address_phase::{
     BytecodeReductionAddressPhase, ProgramImageReductionAddressPhase,
 };
 use super::hamming_weight_claim_reduction::HammingWeightClaimReduction;
 
 /// Source-of-truth for stage 7's sumcheck batch: the instances in Fiat-Shamir
-/// batch order (hamming-weight reduction, trusted then untrusted advice address
-/// phase, then the committed-program-only bytecode and program-image address
-/// phases — each address phase present only when its reduction runs one).
+/// batch order (hamming-weight reduction, then the committed-program-only
+/// bytecode and program-image address phases — each address phase present only
+/// when its reduction runs one).
 /// `#[derive(SumcheckBatch)]` generates the `Stage7InputClaims<F>`,
 /// `Stage7InputPoints<F>`, `Stage7OutputClaims<F>`, `Stage7OutputPoints<F>`, and
 /// `Stage7Challenges<F>` aggregates — one field per instance, in this declaration
@@ -25,24 +23,10 @@ use super::hamming_weight_claim_reduction::HammingWeightClaimReduction;
 /// fixes the canonical opening order absorbed into the transcript, which must
 /// match the prover's commitment order. The four `Option` members contribute only
 /// when their phase ran.
-///
-/// The trusted / untrusted advice reductions are two batch members (each absorbs
-/// its own claimed sum and draws its own batching coefficient), so they are split
-/// into two `Option` fields rather than one — matching the stage-6 cycle-phase
-/// `trusted_advice` / `untrusted_advice` idiom. Each member is its own per-kind
-/// relation type whose produced claims carry a single non-`Option` slot.
 #[derive(SumcheckBatch)]
 #[sumcheck_batch(crate = "crate")]
 pub struct Stage7Sumchecks<F: JoltField> {
     pub hamming_weight_claim_reduction: HammingWeightClaimReduction<F>,
-    /// Final `TrustedAdvice` claim from the trusted advice reduction's address
-    /// phase; present only when that phase runs. On the prove side the kernel
-    /// is the stage-6b cycle-phase object, reclaimed from its `ProofSession`
-    /// carry and phase-transitioned inside `prepare`.
-    pub trusted_advice: Option<TrustedAdviceAddressPhase<F>>,
-    /// Final `UntrustedAdvice` claim from the untrusted advice reduction's address
-    /// phase; present only when that phase runs.
-    pub untrusted_advice: Option<UntrustedAdviceAddressPhase<F>>,
     /// Final `BytecodeChunk(i)` claims from the committed-bytecode reduction's
     /// address phase; present only when that phase runs.
     pub bytecode_address_phase: Option<BytecodeReductionAddressPhase<F>>,
@@ -65,15 +49,6 @@ impl<F: JoltField> Stage7OutputPoints<F> {
             .or_else(|| self.hamming_weight_claim_reduction.bytecode_ra.first())
             .or_else(|| self.hamming_weight_claim_reduction.ram_ra.first())
             .map(Vec::as_slice)
-    }
-
-    /// The advice address-phase final opening point for `kind`, present only when
-    /// that kind's address phase ran.
-    pub fn advice_point(&self, kind: JoltAdviceKind) -> Option<&[F]> {
-        match kind {
-            JoltAdviceKind::Trusted => self.trusted_advice.as_ref().map(|c| c.trusted()),
-            JoltAdviceKind::Untrusted => self.untrusted_advice.as_ref().map(|c| c.untrusted()),
-        }
     }
 
     /// The committed-bytecode address-phase final opening point (shared by every
@@ -156,9 +131,6 @@ mod tests {
     use crate::stages::stage7::hamming_weight_claim_reduction::{
         hamming_weight_claim_reduction_dimensions, HammingWeightClaimReductionOutputClaims,
     };
-    use jolt_claims::protocols::jolt::relations::claim_reductions::advice::{
-        TrustedAdviceAddressPhaseOutputClaims, UntrustedAdviceAddressPhaseOutputClaims,
-    };
     use jolt_claims::protocols::jolt::relations::claim_reductions::bytecode::BytecodeReductionAddressPhaseOutputClaims;
     use jolt_claims::protocols::jolt::relations::claim_reductions::program_image::ProgramImageReductionAddressPhaseOutputClaims;
     use jolt_field::{Fr, Ring};
@@ -168,13 +140,12 @@ mod tests {
     }
 
     /// Locks the stage-7 Fiat-Shamir append order against silent drift: the
-    /// hamming-weight reduced openings, then the trusted then untrusted advice
-    /// address-phase openings, then (when present) the committed-bytecode and
-    /// program-image address-phase openings, each member single-sourcing its own
-    /// per-field order from its `OutputClaims` derive. A wrong batch order here
-    /// silently breaks soundness, so it is pinned with distinct sentinels; the
-    /// absent `Option` members drop out of the stream entirely, and each advice
-    /// member carries only its own kind's slot.
+    /// hamming-weight reduced openings, then (when present) the
+    /// committed-bytecode and program-image address-phase openings, each member
+    /// single-sourcing its own per-field order from its `OutputClaims` derive. A
+    /// wrong batch order here silently breaks soundness, so it is pinned with
+    /// distinct sentinels; the absent `Option` members drop out of the stream
+    /// entirely.
     #[test]
     #[expect(clippy::unwrap_used)]
     fn opening_values_follow_canonical_order() {
@@ -186,8 +157,6 @@ mod tests {
             TracePolynomialOrder::CycleMajor,
             4,
             2,
-            Some(64),
-            Some(64),
             Some(CommittedProgramSchedule {
                 bytecode_len: 8,
                 bytecode_chunk_count: 2,
@@ -204,48 +173,21 @@ mod tests {
             .unwrap();
             HammingWeightClaimReduction::new(dimensions, Vec::new(), Vec::new(), Vec::new())
         };
-        let trusted_instance = || {
-            TrustedAdviceAddressPhase::new(
-                schedule.trusted_advice.as_ref().unwrap(),
-                None,
-                Vec::new(),
-            )
-        };
-        let untrusted_instance = || {
-            UntrustedAdviceAddressPhase::new(
-                schedule.untrusted_advice.as_ref().unwrap(),
-                None,
-                Vec::new(),
-            )
-        };
-
-        // Sentinels are sequential in canonical append order. Under Akita the
-        // hamming reduction itself emits the increment digit and carry openings.
-        let (trusted, untrusted, chunk1, chunk2, image, plain_last, committed_last) =
-            (5, 6, 7, 8, 9, 6, 9);
+        // Sentinels are sequential in canonical append order.
+        let (chunk1, chunk2, image, plain_last, committed_last) = (5, 6, 7, 4, 7);
         let hamming = HammingWeightClaimReductionOutputClaims {
             instruction_ra: vec![fr(1), fr(2)],
             bytecode_ra: vec![fr(3)],
             ram_ra: vec![fr(4)],
         };
-        let trusted_advice = TrustedAdviceAddressPhaseOutputClaims {
-            trusted: fr(trusted),
-        };
-        let untrusted_advice = UntrustedAdviceAddressPhaseOutputClaims {
-            untrusted: fr(untrusted),
-        };
 
         let without_committed_sumchecks = Stage7Sumchecks::<Fr> {
             hamming_weight_claim_reduction: hamming_instance(),
-            trusted_advice: Some(trusted_instance()),
-            untrusted_advice: Some(untrusted_instance()),
             bytecode_address_phase: None,
             program_image_address_phase: None,
         };
         let without_committed = Stage7OutputClaims::<Fr> {
             hamming_weight_claim_reduction: hamming.clone(),
-            trusted_advice: Some(trusted_advice.clone()),
-            untrusted_advice: Some(untrusted_advice.clone()),
             bytecode_address_phase: None,
             program_image_address_phase: None,
         };
@@ -256,8 +198,6 @@ mod tests {
 
         let with_committed_sumchecks = Stage7Sumchecks::<Fr> {
             hamming_weight_claim_reduction: hamming_instance(),
-            trusted_advice: Some(trusted_instance()),
-            untrusted_advice: Some(untrusted_instance()),
             bytecode_address_phase: Some(BytecodeReductionAddressPhase::new(
                 schedule.bytecode.as_ref().unwrap(),
                 None,
@@ -271,8 +211,6 @@ mod tests {
         };
         let with_committed = Stage7OutputClaims::<Fr> {
             hamming_weight_claim_reduction: hamming,
-            trusted_advice: Some(trusted_advice),
-            untrusted_advice: Some(untrusted_advice),
             bytecode_address_phase: Some(BytecodeReductionAddressPhaseOutputClaims {
                 chunks: vec![fr(chunk1), fr(chunk2)],
             }),
@@ -313,12 +251,6 @@ mod tests {
         );
 
         let advice_dimensions = PrecommittedReductionDimensions::new(4, 3, true);
-        let trusted_advice = claim_reductions::advice::TrustedAddressPhase::new(advice_dimensions);
-        assert_eq!(trusted_advice.expected_output_openings::<Fr>().len(), 1);
-        let untrusted_advice =
-            claim_reductions::advice::UntrustedAddressPhase::new(advice_dimensions);
-        assert_eq!(untrusted_advice.expected_output_openings::<Fr>().len(), 1);
-
         let chunk_count = 4;
         let bytecode =
             claim_reductions::bytecode::AddressPhase::new((advice_dimensions, chunk_count));

@@ -331,11 +331,10 @@ impl<F: JoltField> SumcheckKernel<F> for ShiftKernel<F> {
 mod tests {
     use jolt_claims::protocols::jolt::geometry::dimensions::TraceDimensions;
     use jolt_claims::protocols::jolt::{JoltPolynomialId, JoltVirtualPolynomial};
-    use jolt_field::{Fr, Ring};
+    use jolt_claims::NoChallenges;
+    use jolt_field::Fr;
     use jolt_poly::EqPlusOnePolynomial;
-    use jolt_verifier::stages::stage3::spartan_shift::{
-        SpartanShift, SpartanShiftChallenges, SpartanShiftInputClaims,
-    };
+    use jolt_verifier::stages::stage3::spartan_shift::{SpartanShift, SpartanShiftInputClaims};
     use jolt_witness::{JoltWitnessOracle, JoltWitnessPlane, TraceBackend};
 
     use super::super::registers_read_write::test_support::{
@@ -361,13 +360,7 @@ mod tests {
     fn run_parity(log_t: usize, seed: u64) {
         with_shift_plane(log_t, |backend| {
             let r_outer = challenge_sequence(log_t, seed ^ 0x07E5);
-            let r_product = challenge_sequence(log_t, seed ^ 0xFACE);
-            let gamma = Fr::from_u64(0x5EED_0F0F_1234_5678);
-            let relation = SpartanShift::<Fr>::new(
-                TraceDimensions::new(log_t),
-                r_outer.clone(),
-                r_product.clone(),
-            );
+            let relation = SpartanShift::<Fr>::new(TraceDimensions::new(log_t), r_outer.clone());
 
             let pc: Vec<Fr> = JoltWitnessOracle::<Fr>::oracle_table(
                 backend,
@@ -385,7 +378,7 @@ mod tests {
                 &relation,
                 &SpartanShiftInputClaims::default(),
                 &SpartanShiftInputClaims::<Vec<Fr>>::default(),
-                &SpartanShiftChallenges { gamma },
+                &NoChallenges::default(),
                 input_claim,
                 &round_challenges,
             );

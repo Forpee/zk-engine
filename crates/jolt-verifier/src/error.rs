@@ -44,9 +44,6 @@ pub enum VerifierError {
     #[error("export {name:?} is not an entry of the preprocessed program")]
     UnknownEntry { name: String },
 
-    #[error("advice commitments are not supported by the WASM memory layout")]
-    UnsupportedAdvice,
-
     #[error("public input length {got} exceeds configured maximum {max}")]
     InputTooLarge { got: usize, max: usize },
 

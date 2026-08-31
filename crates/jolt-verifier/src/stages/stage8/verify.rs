@@ -47,17 +47,12 @@ pub struct Stage8BatchEntry<'a, F: JoltField, C> {
     pub scale: F,
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Stage 8 takes the shared formula dimensions, trusted-advice commitment, and the two upstream stage outputs it batches; bundling them would add indirection."
-)]
 #[jolt_verifier_derive::fs_scope(Stage8)]
 pub fn verify<F, PCS, VC, T, ZkProof>(
     checked: &CheckedInputs,
     preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     proof: &JoltProof<PCS, VC, ZkProof>,
     formula_dimensions: &JoltFormulaDimensions,
-    trusted_advice_commitment: Option<&PCS::Output>,
     transcript: &mut T,
     stage6: &Stage6bOutput<F, VC::Output>,
     stage7: &Stage7Output<F, VC::Output>,
@@ -127,9 +122,7 @@ where
     let entries = batch_entries(
         preprocessing,
         &proof.commitments,
-        proof.untrusted_advice_commitment.as_ref(),
         layout,
-        trusted_advice_commitment,
         &opening_point,
         hamming_opening_point.as_slice(),
         inc_opening_point,
@@ -253,9 +246,7 @@ where
 pub fn batch_entries<'a, F, PCS, VC>(
     preprocessing: &'a JoltVerifierPreprocessing<PCS, VC>,
     commitments: &'a JoltCommitments<PCS::Output>,
-    untrusted_advice_commitment: Option<&'a PCS::Output>,
     layout: JoltRaPolynomialLayout,
-    trusted_advice_commitment: Option<&'a PCS::Output>,
     opening_point: &[F],
     hamming_opening_point: &[F],
     inc_opening_point: &[F],
@@ -272,13 +263,9 @@ where
             .iter()
             .find(|opening| opening.polynomial == polynomial)
     };
-    let include_trusted = precommitted_final(JoltCommittedPolynomial::TrustedAdvice).is_some();
-    let include_untrusted = precommitted_final(JoltCommittedPolynomial::UntrustedAdvice).is_some();
     let committed_program = preprocessing.program.committed();
     let order = final_opening_polynomial_order(
         layout,
-        include_trusted,
-        include_untrusted,
         committed_program.map(|committed| committed.bytecode_chunk_count()),
     );
 
@@ -373,18 +360,6 @@ where
                     )?;
                     (commitment, hamming_opening_point, opening_claim)
                 }
-                JoltCommittedPolynomial::TrustedAdvice => precommitted_entry(
-                    precommitted_final(polynomial),
-                    trusted_advice_commitment,
-                    polynomial,
-                    id,
-                )?,
-                JoltCommittedPolynomial::UntrustedAdvice => precommitted_entry(
-                    precommitted_final(polynomial),
-                    untrusted_advice_commitment,
-                    polynomial,
-                    id,
-                )?,
                 JoltCommittedPolynomial::BytecodeChunk(index) => precommitted_entry(
                     precommitted_final(polynomial),
                     committed_program
@@ -400,8 +375,6 @@ where
                 )?,
                 JoltCommittedPolynomial::BalancedIncDigit(_)
                 | JoltCommittedPolynomial::BalancedIncCarry
-                | JoltCommittedPolynomial::TrustedAdviceBytes
-                | JoltCommittedPolynomial::UntrustedAdviceBytes
                 | JoltCommittedPolynomial::BytecodeRegisterSelector { .. }
                 | JoltCommittedPolynomial::BytecodeCircuitFlag { .. }
                 | JoltCommittedPolynomial::BytecodeInstructionFlag { .. }

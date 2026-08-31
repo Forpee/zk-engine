@@ -11,8 +11,6 @@
 //! - **Flush-time summary** — `summary::finalize_trace` renders the chrome trace's
 //!   span stream into a machine-queryable `summary.json` next to the trace (see the
 //!   `taxonomy` module for the normative span schema).
-//! - **CPU profiling** (`pprof` feature) — scoped `pprof` guards that write `.pb`
-//!   flamegraph files on drop.
 //! - **Heap flamegraphs** (`allocative` feature) — generates SVG flamegraphs from
 //!   `allocative`-instrumented data structures.
 //!
@@ -38,7 +36,6 @@
 //! |------|-------------|
 //! | `summary` (default) | Flush-time `summary.json` pipeline (schemars/serde stack) |
 //! | `monitor` | Background system metrics sampling (CPU, memory, cores) |
-//! | `pprof` | Scoped CPU profiling via `pprof` with `.pb` output |
 //! | `allocative` | Heap flamegraph generation from `allocative`-instrumented types |
 //!
 //! Subscriber-only consumers (the legacy harness bin) depend with
@@ -67,8 +64,6 @@ pub mod memory_viz;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "monitor"))]
 pub mod monitor;
-
-mod pprof_guard;
 
 #[cfg(feature = "allocative")]
 pub mod flamegraph;
@@ -124,5 +119,3 @@ impl MetricsMonitor {
         Self
     }
 }
-
-pub use pprof_guard::PprofGuard;

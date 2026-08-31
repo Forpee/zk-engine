@@ -22,9 +22,7 @@
 use jolt_claims::protocols::jolt::{JoltCommittedPolynomial, TracePolynomialOrder};
 use jolt_field::JoltField;
 use jolt_openings::CommitmentScheme;
-use jolt_witness::{
-    stream_witnesses, JoltWitnessOracle, RandomAccessRows, RowSource, StreamConsumer, WitnessError,
-};
+use jolt_witness::{stream_witnesses, RandomAccessRows, RowSource, StreamConsumer, WitnessError};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -84,19 +82,6 @@ where
         }
 
         commit_streaming(source, ids, grid, setup, superchunk_cycles())
-    }
-
-    fn commit_advice(
-        &self,
-        session: &mut ProofSession,
-        witness: &dyn JoltWitnessOracle<F>,
-        id: JoltCommittedPolynomial,
-        grid: CommitmentGrid,
-        setup: &PCS::ProverSetup,
-    ) -> Result<WitnessCommitment<PCS>, KernelError<F>> {
-        // Advice grids are small single-column commits; the reference pass
-        // is already the right shape.
-        ReferenceBackend.commit_advice(session, witness, id, grid, setup)
     }
 }
 
@@ -429,18 +414,7 @@ mod tests {
             RamOp::Read { word: 3 },
         ];
         with_ram_fixture(shape, ops, |witness| {
-            let ids: Vec<JoltCommittedPolynomial> = witness
-                .committed_order()
-                .unwrap()
-                .into_iter()
-                .filter(|id| {
-                    !matches!(
-                        id,
-                        JoltCommittedPolynomial::TrustedAdvice
-                            | JoltCommittedPolynomial::UntrustedAdvice
-                    )
-                })
-                .collect();
+            let ids: Vec<JoltCommittedPolynomial> = witness.committed_order().unwrap();
             let grid = CommitmentGrid {
                 total_vars: 4 + shape.log_t,
                 log_t: shape.log_t,

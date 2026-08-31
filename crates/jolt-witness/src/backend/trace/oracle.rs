@@ -33,9 +33,6 @@ pub(crate) const PROTOCOL_INTERMEDIATE_REASON: &str =
 /// Vocabulary with no consumer on the modular stack; no derivation exists.
 pub(crate) const UNSERVED_REASON: &str =
     "no consumer on the modular stack; no trace derivation is defined";
-/// WebAssembly programs have no advice memory.
-pub(crate) const NO_ADVICE_REASON: &str =
-    "WebAssembly programs have no trusted/untrusted advice memory";
 
 fn not_served(id: JoltPolynomialId, reason: &'static str) -> WitnessError {
     WitnessError::NotServed {
@@ -64,10 +61,6 @@ impl TraceBackend {
                     require_index(index, self.ra_layout()?.ram())?;
                     Ok(Shape::new(self.one_hot_log_rows()?, OneHot))
                 }
-                C::TrustedAdvice
-                | C::UntrustedAdvice
-                | C::TrustedAdviceBytes
-                | C::UntrustedAdviceBytes => Err(not_served(id, NO_ADVICE_REASON)),
                 C::BytecodeChunk(_) | C::ProgramImageInit => {
                     Err(not_served(id, COMMITTED_PROGRAM_REASON))
                 }
@@ -161,10 +154,6 @@ impl<F: JoltField> JoltWitnessOracle<F> for TraceBackend {
                     self.ra_layout()?.ram(),
                     self.config.one_hot.committed_chunk_bits(),
                 ),
-                C::TrustedAdvice
-                | C::UntrustedAdvice
-                | C::TrustedAdviceBytes
-                | C::UntrustedAdviceBytes => Err(not_served(id, NO_ADVICE_REASON)),
                 C::BytecodeChunk(_) | C::ProgramImageInit => {
                     Err(not_served(id, COMMITTED_PROGRAM_REASON))
                 }

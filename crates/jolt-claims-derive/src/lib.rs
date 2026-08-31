@@ -41,8 +41,6 @@
 //!   variant, e.g. `#[opening(OpFlags(CircuitFlags::VirtualInstruction))]`. The
 //!   payload tokens are emitted verbatim, so they must resolve at the derive site.
 //! - `#[opening(committed = CommittedVariant)]` — a committed opening.
-//! - `#[opening(trusted_advice)]` / `#[opening(untrusted_advice)]` — an advice
-//!   opening.
 //!
 //! Arity is read from the field type, not the annotation. A `C` or `Option<C>`
 //! field is a single opening: `Variant` must be a unit variant or a
@@ -131,8 +129,6 @@ enum LeafKind {
         payload: Option<TokenStream2>,
     },
     Committed(Ident),
-    TrustedAdvice,
-    UntrustedAdvice,
 }
 
 struct OpeningSpec {
@@ -213,8 +209,6 @@ fn opening_attr(field: &syn::Field) -> Option<&Attribute> {
 fn parse_opening(attr: &Attribute) -> syn::Result<OpeningSpec> {
     let mut virtual_variant: Option<(syn::Path, Option<TokenStream2>)> = None;
     let mut committed: Option<Ident> = None;
-    let mut trusted_advice = false;
-    let mut untrusted_advice = false;
     let mut from: Option<Ident> = None;
 
     attr.parse_nested_meta(|meta| {
@@ -222,10 +216,6 @@ fn parse_opening(attr: &Attribute) -> syn::Result<OpeningSpec> {
             committed = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("from") {
             from = Some(meta.value()?.parse()?);
-        } else if meta.path.is_ident("trusted_advice") {
-            trusted_advice = true;
-        } else if meta.path.is_ident("untrusted_advice") {
-            untrusted_advice = true;
         } else {
             // A virtual-polynomial variant: a bare `Variant`, or a payload-carrying
             // `Variant(payload::PATH)` such as
@@ -247,8 +237,6 @@ fn parse_opening(attr: &Attribute) -> syn::Result<OpeningSpec> {
     let kinds = [
         virtual_variant.map(|(variant, payload)| LeafKind::Virtual { variant, payload }),
         committed.map(LeafKind::Committed),
-        trusted_advice.then_some(LeafKind::TrustedAdvice),
-        untrusted_advice.then_some(LeafKind::UntrustedAdvice),
     ];
     let mut selected = kinds.into_iter().flatten();
     let kind = selected
@@ -320,17 +308,6 @@ fn plan_field(field: &syn::Field, struct_relation: Option<&Ident>) -> syn::Resul
     let is_many = is_vec_type(&field.ty);
     if is_many
         && matches!(
-            spec.kind,
-            LeafKind::TrustedAdvice | LeafKind::UntrustedAdvice
-        )
-    {
-        return Err(syn::Error::new_spanned(
-            &field.ty,
-            "advice openings are scalar; a `Vec` advice field has no indexed id",
-        ));
-    }
-    if is_many
-        && matches!(
             &spec.kind,
             LeafKind::Virtual {
                 payload: Some(_),
@@ -383,8 +360,6 @@ fn id_expr(kind: &LeafKind, relation: &Ident, index: Option<TokenStream2>) -> To
             };
             quote!(#jolt::JoltOpeningId::committed(#polynomial, #rel))
         }
-        LeafKind::TrustedAdvice => quote!(#jolt::JoltOpeningId::trusted_advice(#rel)),
-        LeafKind::UntrustedAdvice => quote!(#jolt::JoltOpeningId::untrusted_advice(#rel)),
     }
 }
 

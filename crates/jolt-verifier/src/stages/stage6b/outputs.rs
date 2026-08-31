@@ -15,7 +15,6 @@ pub use super::booleanity::BooleanityOutputClaims;
 pub use super::bytecode_read_raf::BytecodeReadRafOutputClaims;
 pub use super::committed_reduction_cycle_phase::{
     BytecodeReductionCyclePhaseOutputClaims, ProgramImageReductionCyclePhaseOutputClaims,
-    TrustedAdviceCyclePhaseOutputClaims, UntrustedAdviceCyclePhaseOutputClaims,
 };
 pub use super::inc_claim_reduction::IncClaimReductionOutputClaims;
 pub use super::instruction_ra_virtualization::InstructionRaVirtualizationOutputClaims;
@@ -25,8 +24,7 @@ pub use super::ram_ra_virtualization::RamRaVirtualizationOutputClaims;
 use super::booleanity::Booleanity;
 use super::bytecode_read_raf::BytecodeReadRafCycle;
 use super::committed_reduction_cycle_phase::{
-    BytecodeReductionCyclePhase, ProgramImageReductionCyclePhase, TrustedAdviceCyclePhase,
-    UntrustedAdviceCyclePhase,
+    BytecodeReductionCyclePhase, ProgramImageReductionCyclePhase,
 };
 use super::inc_claim_reduction::IncClaimReduction;
 use super::instruction_ra_virtualization::InstructionRaVirtualization;
@@ -83,8 +81,6 @@ pub struct Stage6bSumchecks<F: JoltField> {
     /// 6b→7 batch boundary as `ProofSession` carries: each cycle kernel parks
     /// the shared two-phase state at prepare, and stage 7's address-phase
     /// members reclaim it.
-    pub trusted_advice: Option<TrustedAdviceCyclePhase<F>>,
-    pub untrusted_advice: Option<UntrustedAdviceCyclePhase<F>>,
     pub bytecode_reduction: Option<BytecodeReductionCyclePhase<F>>,
     pub program_image_reduction: Option<ProgramImageReductionCyclePhase<F>>,
 }
@@ -115,22 +111,6 @@ impl<F: JoltField> Stage6bOutputPoints<F> {
         &self.inc_claim_reduction.ram_inc
     }
 
-    /// The advice cycle-phase opening point for `kind`, present only when that
-    /// advice reduction ran a cycle phase.
-    pub fn advice_cycle_phase_opening_point(
-        &self,
-        kind: jolt_claims::protocols::jolt::JoltAdviceKind,
-    ) -> Option<&[F]> {
-        use jolt_claims::protocols::jolt::JoltAdviceKind;
-        match kind {
-            JoltAdviceKind::Trusted => self.trusted_advice.as_ref().map(|claims| claims.trusted()),
-            JoltAdviceKind::Untrusted => self
-                .untrusted_advice
-                .as_ref()
-                .map(|claims| claims.untrusted()),
-        }
-    }
-
     /// The program-image claim-reduction cycle-phase opening point, present only in
     /// committed-program mode when the reduction ran a cycle phase.
     pub fn program_image_opening_point(&self) -> Option<&[F]> {
@@ -148,17 +128,6 @@ impl<F: JoltField> Stage6bOutputPoints<F> {
             Some(point) => Some(point.as_slice()),
             None => reduction.chunks.first().map(Vec::as_slice),
         }
-    }
-
-    /// The advice cycle-phase `cycle_phase_variables` for `kind`: the raw active
-    /// cycle challenges, recovered as `reverse(opening_point)` (the cycle opening
-    /// point is the reverse of the variable challenges). Stage 7's address phase
-    /// reconstructs its opening point from these.
-    pub fn advice_cycle_phase_variables(
-        &self,
-        kind: jolt_claims::protocols::jolt::JoltAdviceKind,
-    ) -> Option<Vec<F>> {
-        Some(reversed(self.advice_cycle_phase_opening_point(kind)?))
     }
 
     /// The program-image cycle-phase `cycle_phase_variables` (`reverse(opening_point)`).
@@ -192,31 +161,10 @@ impl<F: JoltField> Stage6bOutputPoints<F> {
                 .committed_instruction_ra
                 .len()
             + 2
-            + usize::from(self.trusted_advice.is_some())
-            + usize::from(self.untrusted_advice.is_some())
             + self.bytecode_reduction.as_ref().map_or(0, |reduction| {
                 usize::from(reduction.intermediate.is_some()) + reduction.chunks.len()
             })
             + usize::from(self.program_image_reduction.is_some())
-    }
-}
-
-impl<F: JoltField> Stage6bOutputClaims<F> {
-    /// The consumed cycle-phase advice opening *value* for `kind` (the trusted /
-    /// untrusted slot of that advice member), present only when the advice
-    /// reduction ran a cycle phase. Read by stage 7's advice input wiring and stage
-    /// 8's precommitted finals resolution.
-    pub fn advice_cycle_phase_claim(
-        &self,
-        kind: jolt_claims::protocols::jolt::JoltAdviceKind,
-    ) -> Option<F> {
-        use jolt_claims::protocols::jolt::JoltAdviceKind;
-        match kind {
-            JoltAdviceKind::Trusted => self.trusted_advice.as_ref().map(|claim| claim.trusted),
-            JoltAdviceKind::Untrusted => {
-                self.untrusted_advice.as_ref().map(|claim| claim.untrusted)
-            }
-        }
     }
 }
 

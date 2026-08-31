@@ -180,12 +180,6 @@ tracing = { version = "0.1.37", default-features = false, features = [
 tracing-chrome = "0.7.1"
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 allocative = { version = "=0.3.6" }
-pprof = { version = "0.15", features = [
-  "prost-codec",
-  "flamegraph",
-  "frame-pointer",
-] }
-prost = "0.14"
 
 # Parsing
 syn = { version = "3", features = ["full"] }

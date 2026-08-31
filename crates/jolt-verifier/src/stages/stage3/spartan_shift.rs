@@ -6,7 +6,7 @@
 
 use jolt_claims::protocols::jolt::relations;
 pub use jolt_claims::protocols::jolt::relations::spartan::{
-    SpartanShiftChallenges, SpartanShiftInputClaims, SpartanShiftOutputClaims,
+    SpartanShiftInputClaims, SpartanShiftOutputClaims,
 };
 use jolt_claims::protocols::jolt::{
     geometry::dimensions::TraceDimensions, JoltDerivedId, SpartanShiftPublic,
@@ -33,28 +33,18 @@ pub fn spartan_shift_input_values_from_upstream<F: JoltField>(
 pub struct SpartanShift<F: JoltField> {
     symbolic: relations::spartan::Shift,
     product_uniskip_tau_low: Vec<F>,
-    product_remainder_opening_point: Vec<F>,
 }
 
 impl<F: JoltField> SpartanShift<F> {
-    pub fn new(
-        trace_dimensions: TraceDimensions,
-        product_uniskip_tau_low: Vec<F>,
-        product_remainder_opening_point: Vec<F>,
-    ) -> Self {
+    pub fn new(trace_dimensions: TraceDimensions, product_uniskip_tau_low: Vec<F>) -> Self {
         Self {
             symbolic: relations::spartan::Shift::new(trace_dimensions),
             product_uniskip_tau_low,
-            product_remainder_opening_point,
         }
     }
 
     pub fn product_uniskip_tau_low(&self) -> &[F] {
         &self.product_uniskip_tau_low
-    }
-
-    pub fn product_remainder_opening_point(&self) -> &[F] {
-        &self.product_remainder_opening_point
     }
 }
 
@@ -79,7 +69,7 @@ impl<F: JoltField> ConcreteSumcheck<F> for SpartanShift<F> {
         id: &JoltDerivedId,
         _input_points: &SpartanShiftInputClaims<Vec<F>>,
         output_points: &SpartanShiftOutputClaims<Vec<F>>,
-        _challenges: &SpartanShiftChallenges<F>,
+        _challenges: &jolt_claims::NoChallenges<F>,
     ) -> Result<F, VerifierError> {
         let JoltDerivedId::SpartanShift(public_id) = id else {
             return Err(VerifierError::MissingStageClaimDerived { id: *id });
@@ -89,10 +79,6 @@ impl<F: JoltField> ConcreteSumcheck<F> for SpartanShift<F> {
         match public_id {
             SpartanShiftPublic::EqPlusOneOuter => Ok(EqPlusOnePolynomial::new(
                 self.product_uniskip_tau_low.clone(),
-            )
-            .evaluate(opening_point)),
-            SpartanShiftPublic::EqPlusOneProduct => Ok(EqPlusOnePolynomial::new(
-                self.product_remainder_opening_point.clone(),
             )
             .evaluate(opening_point)),
         }

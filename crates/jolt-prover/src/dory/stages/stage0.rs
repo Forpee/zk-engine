@@ -27,18 +27,9 @@ use jolt_witness::{validate_servable, JoltWitnessOracle, RowSource, WitnessBundl
 
 use crate::{CommittedProgramCandidates, JoltProverPreprocessing, ProverConfig, ProverError};
 
-/// The externally supplied trusted-advice commitment (produced at
-/// preprocessing time, before any proving) and its opening hint. Mirrors
-/// legacy's prover-constructor pair: the commitment is absorbed in stage 0 and
-/// batched in stage 8, and the hint joins the stage-8 hint combination.
-pub struct TrustedAdviceCommitment<PCS: CommitmentScheme> {
-    pub commitment: PCS::Output,
-    pub hint: PCS::OpeningHint,
-}
-
 /// Stage 0's outputs: the validated inputs, the seeded transcript (positioned
 /// exactly where the verifier's `verify_until_stage1` leaves its own), the
-/// witness commitments in wire form, the untrusted-advice commitment (proved
+/// witness commitments in wire form,
 /// at prove time, carried on the proof), and the per-polynomial opening hints
 /// the stage-8 joint opening will consume (advice hints included).
 pub struct Stage0Output<PCS, T>
@@ -48,13 +39,12 @@ where
     pub checked: CheckedInputs,
     pub transcript: T,
     pub commitments: JoltCommitments<PCS::Output>,
-    pub untrusted_advice_commitment: Option<PCS::Output>,
     pub hints: Vec<(JoltCommittedPolynomial, PCS::OpeningHint)>,
 }
 
 /// Validate inputs, seed the transcript, commit the witness (the untrusted
-/// advice polynomial in its own balanced grid), and absorb the commitments
-/// (main, untrusted advice, trusted advice, then the preprocessing-held
+/// polynomial in its own balanced grid), and absorb the commitments
+/// (main, then the preprocessing-held
 /// committed-program chunk/image commitments — the verifier's own absorb
 /// order).
 #[tracing::instrument(skip_all)]
@@ -63,7 +53,6 @@ pub fn prove_stage0<F, PCS, VC, T, W>(
     session: &mut ProofSession,
     preprocessing: &JoltProverPreprocessing<PCS, VC>,
     config: &ProverConfig,
-    trusted_advice: Option<&TrustedAdviceCommitment<PCS>>,
     witness: &W,
     public_io: &PublicIo,
 ) -> Result<Stage0Output<PCS, T>, ProverError<F>>
@@ -108,8 +97,6 @@ where
         config.ram_K,
         config.trace_polynomial_order,
         config.one_hot_config,
-        trusted_advice.is_some(),
-        false,
         cfg!(feature = "zk"),
     )?;
 
@@ -124,16 +111,7 @@ where
         &mut transcript,
     );
 
-    let ids: Vec<JoltCommittedPolynomial> = witness
-        .committed_order()?
-        .into_iter()
-        .filter(|id| {
-            !matches!(
-                id,
-                JoltCommittedPolynomial::TrustedAdvice | JoltCommittedPolynomial::UntrustedAdvice
-            )
-        })
-        .collect();
+    let ids: Vec<JoltCommittedPolynomial> = witness.committed_order()?;
     // Stage-0 validation: every id the proof will request — the committed
     // set and each bundle's annotated set — must be servable by the backend
     // before witness generation starts.
@@ -171,12 +149,6 @@ where
     })?;
     let (commitments, mut hints) = assemble_commitments::<PCS>(committed)?;
 
-    // The WASM layout has no advice regions: `validate_inputs` rejects
-    // advice commitments, so no untrusted advice polynomial is ever committed.
-    let untrusted_advice_commitment = None;
-    if let Some(trusted) = trusted_advice {
-        hints.push((JoltCommittedPolynomial::TrustedAdvice, trusted.hint.clone()));
-    }
     // The committed-program hints ride from preprocessing (the chunk/image
     // commitments were produced there, before any proving).
     if let Some(committed) = &preprocessing.committed_program {
@@ -199,12 +171,7 @@ where
         ));
     }
 
-    absorb_transcript_commitments(
-        &commitments,
-        untrusted_advice_commitment.as_ref(),
-        trusted_advice.map(|trusted| &trusted.commitment),
-        &mut transcript,
-    );
+    absorb_transcript_commitments(&commitments, &mut transcript);
     if let Some(committed) = preprocessing.verifier.program.committed() {
         absorb_committed_program_commitments(
             &committed.bytecode_chunk_commitments,
@@ -217,7 +184,6 @@ where
         checked,
         transcript,
         commitments,
-        untrusted_advice_commitment,
         hints,
     })
 }
@@ -255,15 +221,9 @@ fn assemble_commitments<PCS: CommitmentScheme>(
             JoltCommittedPolynomial::InstructionRa(_) => instruction.push(commitment),
             JoltCommittedPolynomial::RamRa(_) => ram.push(commitment),
             JoltCommittedPolynomial::BytecodeRa(_) => bytecode.push(commitment),
-            other => {
+            _ => {
                 return Err(ProverError::InvariantViolation {
-                    reason: match other {
-                        JoltCommittedPolynomial::TrustedAdvice
-                        | JoltCommittedPolynomial::UntrustedAdvice => {
-                            "advice polynomials are absorbed separately, not as main commitments"
-                        }
-                        _ => "precommitted polynomials are not main witness commitments",
-                    },
+                    reason: "precommitted polynomials are not main witness commitments",
                 });
             }
         }

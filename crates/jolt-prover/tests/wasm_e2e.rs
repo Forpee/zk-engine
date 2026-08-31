@@ -76,7 +76,6 @@ fn prove_fib(
         &backend,
         &prover_preprocessing,
         &run.config,
-        None,
         &witness,
         &run.io,
     )
@@ -103,7 +102,6 @@ fn verify(
         preprocessing,
         io,
         proof,
-        None,
     )
 }
 

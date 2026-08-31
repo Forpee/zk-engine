@@ -157,7 +157,7 @@ mod tests {
                 id if id == lookup_output_reduced() => lookup_output,
                 id if id == left_lookup_operand_reduced() => left_lookup_operand,
                 id if id == right_lookup_operand_reduced() => right_lookup_operand,
-                _ => zero,
+                JoltOpeningId::Polynomial { .. } => zero,
             },
             |id| match *id {
                 JoltChallengeId::InstructionReadRaf(InstructionReadRafChallenge::Gamma) => gamma,
@@ -176,7 +176,7 @@ mod tests {
                     relation: JoltRelationId::InstructionReadRaf,
                 } => table_flags[index],
                 id if id == instruction_raf_flag() => raf_flag,
-                _ => zero,
+                JoltOpeningId::Polynomial { .. } => zero,
             },
             |_| zero,
             |id| match *id {

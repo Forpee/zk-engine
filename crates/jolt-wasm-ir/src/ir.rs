@@ -61,17 +61,6 @@ impl Reg {
     /// First register of the per-function frame.
     pub const FRAME_BASE: u8 = 12;
 
-    /// The bounds-limit register for a `bytes`-wide access.
-    pub const fn limit(bytes: u8) -> Option<Reg> {
-        match bytes {
-            1 => Some(Reg::LIMIT_B),
-            2 => Some(Reg::LIMIT_H),
-            4 => Some(Reg::LIMIT_W),
-            8 => Some(Reg::LIMIT_D),
-            _ => None,
-        }
-    }
-
     /// Register holding frame slot `slot` (local index, or locals + stack depth).
     pub fn frame_slot(slot: usize) -> Option<Reg> {
         (slot < MAX_FRAME_SLOTS).then(|| Reg(Self::FRAME_BASE + slot as u8))

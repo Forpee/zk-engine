@@ -66,11 +66,7 @@ where
 
     // The generated stage drivers, on the verifier's own batch type.
     let sumchecks = Stage3Sumchecks {
-        shift: SpartanShift::new(
-            trace_dimensions,
-            product_tau_low.clone(),
-            product_remainder_point.clone(),
-        ),
+        shift: SpartanShift::new(trace_dimensions, product_tau_low.clone()),
         instruction_input: InstructionInput::new(trace_dimensions, product_remainder_point),
         registers_claim_reduction: RegistersClaimReduction::new(trace_dimensions, product_tau_low),
     };

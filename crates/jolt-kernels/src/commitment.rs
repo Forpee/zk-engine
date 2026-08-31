@@ -14,7 +14,7 @@ use jolt_openings::StreamingCommitment;
 #[cfg(feature = "zk")]
 use jolt_openings::ZkStreamingCommitment;
 use jolt_witness::witnesses::{BytecodePc, LookupIndex, RamInc, RdInc, RemappedRamAddress};
-use jolt_witness::{JoltWitnessOracle, RowSource, WitnessBundle};
+use jolt_witness::{RowSource, WitnessBundle};
 
 use crate::{KernelError, ProofSession};
 
@@ -78,7 +78,7 @@ where
 /// `2^⌈total_vars/2⌉` columns, where `total_vars` is the maximum over the
 /// one-hot main matrix (`log_k_chunk + log_t`) and any precommitted-candidate
 /// shapes (advice, committed program). `order` is the proof's
-/// coefficient-placement mode; dedicated advice grids are always
+/// coefficient-placement mode; dedicated precommitted grids are always
 /// [`TracePolynomialOrder::CycleMajor`] (their placement is contiguous in
 /// both proof layouts — legacy's strides collapse outside the main context)
 /// with `log_k_chunk` 0 (no one-hot polynomials).
@@ -131,9 +131,7 @@ pub struct WitnessCommitment<PCS: CommitmentScheme> {
 /// deliberately does not require
 /// [`StreamingCommitment`](jolt_openings::StreamingCommitment) — that is
 /// the reference implementation's
-/// strategy). Advice polynomials are not trace-derived and commit through
-/// [`commit_advice`](Self::commit_advice) instead. Transcript-free: the
-/// caller absorbs the returned commitments.
+/// strategy). Transcript-free: the caller absorbs the returned commitments.
 pub trait CommitWitness<F, PCS>
 where
     F: JoltField,
@@ -147,14 +145,4 @@ where
         grid: CommitmentGrid,
         setup: &PCS::ProverSetup,
     ) -> Result<Vec<WitnessCommitment<PCS>>, KernelError<F>>;
-
-    /// Commit one advice polynomial in its dedicated cycle-major grid.
-    fn commit_advice(
-        &self,
-        session: &mut ProofSession,
-        witness: &dyn JoltWitnessOracle<F>,
-        id: JoltCommittedPolynomial,
-        grid: CommitmentGrid,
-        setup: &PCS::ProverSetup,
-    ) -> Result<WitnessCommitment<PCS>, KernelError<F>>;
 }

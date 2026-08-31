@@ -583,6 +583,14 @@ mod tests {
         Fr::from_u64(value)
     }
 
+    /// The optional leaf's opening id (`OptionalOutput::program_image`).
+    fn optional_opening(relation: JoltRelationId) -> JoltOpeningId {
+        JoltOpeningId::virtual_polynomial(
+            JoltVirtualPolynomial::ProgramImageInitContributionRw,
+            relation,
+        )
+    }
+
     fn virt(polynomial: JoltVirtualPolynomial, relation: JoltRelationId) -> JoltOpeningId {
         JoltOpeningId::virtual_polynomial(polynomial, relation)
     }
@@ -750,8 +758,8 @@ mod tests {
     #[derive(OutputClaims)]
     #[relation(RamValCheck)]
     struct OptionalOutput<C> {
-        #[opening(untrusted_advice)]
-        untrusted: Option<C>,
+        #[opening(ProgramImageInitContributionRw)]
+        program_image: Option<C>,
         #[opening(committed = RamInc)]
         ram_inc: C,
     }
@@ -760,13 +768,13 @@ mod tests {
     fn output_leaf_handles_optional_fields() {
         let relation = JoltRelationId::RamValCheck;
         let present = OptionalOutput {
-            untrusted: Some(fr(7)),
+            program_image: Some(fr(7)),
             ram_inc: fr(8),
         };
         assert_eq!(present.opening_values().len(), 2);
         assert_eq!(present.opening_values(), vec![fr(7), fr(8)]);
         assert_eq!(
-            present.resolve_output(&JoltOpeningId::untrusted_advice(relation)),
+            present.resolve_output(&optional_opening(relation)),
             Some(fr(7)),
         );
         assert_eq!(
@@ -778,15 +786,12 @@ mod tests {
         // An absent optional opening drops out of the count, the value stream,
         // the transcript appends, and id resolution.
         let absent = OptionalOutput {
-            untrusted: None,
+            program_image: None,
             ram_inc: fr(8),
         };
         assert_eq!(absent.opening_values().len(), 1);
         assert_eq!(absent.opening_values(), vec![fr(8)]);
-        assert_eq!(
-            absent.resolve_output(&JoltOpeningId::untrusted_advice(relation)),
-            None,
-        );
+        assert_eq!(absent.resolve_output(&optional_opening(relation)), None,);
         assert_append_matches_values(&absent);
     }
 
@@ -814,7 +819,7 @@ mod tests {
     #[test]
     fn from_opening_values_tracks_option_presence_and_errors_on_missing_scalar() {
         let relation = JoltRelationId::RamValCheck;
-        let advice_id = JoltOpeningId::untrusted_advice(relation);
+        let advice_id = optional_opening(relation);
         let ram_inc_id = committed(JoltCommittedPolynomial::RamInc, relation);
 
         // Present `Option`: both ids resolve.
@@ -879,19 +884,19 @@ mod tests {
         // absent struct list different ids — the order tracks instance presence.
         let relation = JoltRelationId::RamValCheck;
         let present = OptionalOutput {
-            untrusted: Some(fr(7)),
+            program_image: Some(fr(7)),
             ram_inc: fr(8),
         };
         assert_eq!(
             present.canonical_order(),
             vec![
-                JoltOpeningId::untrusted_advice(relation),
+                optional_opening(relation),
                 committed(JoltCommittedPolynomial::RamInc, relation),
             ],
         );
 
         let absent = OptionalOutput {
-            untrusted: None,
+            program_image: None,
             ram_inc: fr(8),
         };
         assert_eq!(
@@ -949,17 +954,17 @@ mod tests {
     fn output_leaf_option_point_accessor() {
         // The `Option` point accessor surfaces the point only when `Some`.
         let present = OptionalOutput::<Vec<Fr>> {
-            untrusted: Some(vec![fr(7)]),
+            program_image: Some(vec![fr(7)]),
             ram_inc: vec![fr(8)],
         };
-        assert_eq!(present.untrusted(), Some(&[fr(7)] as &[Fr]));
+        assert_eq!(present.program_image(), Some(&[fr(7)] as &[Fr]));
         assert_eq!(present.ram_inc(), &[fr(8)] as &[Fr]);
 
         let absent = OptionalOutput::<Vec<Fr>> {
-            untrusted: None,
+            program_image: None,
             ram_inc: vec![fr(8)],
         };
-        assert_eq!(absent.untrusted(), None);
+        assert_eq!(absent.program_image(), None);
     }
 
     #[test]

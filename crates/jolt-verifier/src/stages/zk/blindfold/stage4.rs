@@ -32,7 +32,7 @@ where
     let registers_claims = relations::registers::ReadWriteChecking::new(register_dimensions);
     let ram_init = ram_val_check_init(input)?;
     // Supply the `Val_init` decomposition scalars as `Public` values (formerly
-    // baked as `Term` constants in the expression); the advice / program-image
+    // baked as `Term` constants in the expression); the program-image
     // openings they weight remain hidden witnesses.
     values.public(
         JoltDerivedId::from(RamValCheckPublic::InitEval),
@@ -110,12 +110,6 @@ where
     )?;
 
     let mut output_ids = Vec::new();
-    if input.proof.untrusted_advice_commitment.is_some() {
-        output_ids.push(ram::val_check_advice_opening(JoltAdviceKind::Untrusted));
-    }
-    if input.checked.trusted_advice_commitment_present {
-        output_ids.push(ram::val_check_advice_opening(JoltAdviceKind::Trusted));
-    }
     if input.checked.precommitted.program_image.is_some() {
         output_ids.push(program_image::ram_val_check_contribution_opening());
     }
@@ -129,15 +123,13 @@ where
         }
         .canonical_order(),
     );
-    // The advice / program-image openings are produced by the RAM value-check
+    // The program-image opening is produced by the RAM value-check
     // instance, but the stage-4 commit (flush) order appends them *first* (above),
     // before the registers; so here, at the tail, only the main `ram_ra`/`ram_inc`
-    // canonical order is emitted (advice / program-image leaves left `None`),
+    // canonical order is emitted (the program-image leaf left `None`),
     // preserving the prover's per-stage opening-id block order.
     output_ids.extend(
         relations::ram::RamValCheckOutputClaims::<PCS::Field> {
-            untrusted_advice: None,
-            trusted_advice: None,
             program_image: None,
             ram_ra: PCS::Field::zero(),
             ram_inc: PCS::Field::zero(),

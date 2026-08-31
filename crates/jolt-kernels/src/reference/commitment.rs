@@ -20,14 +20,12 @@
 //! commits run, full matrix height included (its trailing identity rows are
 //! part of the wire hint).
 
-use jolt_claims::protocols::jolt::{
-    JoltCommittedPolynomial, JoltPolynomialId, TracePolynomialOrder,
-};
+use jolt_claims::protocols::jolt::{JoltCommittedPolynomial, TracePolynomialOrder};
 use jolt_field::JoltField;
 use jolt_openings::{CommitmentScheme, StreamingCommitment};
 use jolt_utils::unsafe_allocate_zero_vec;
 use jolt_witness::witnesses::RaChunkSelector;
-use jolt_witness::{stream_witnesses, JoltWitnessOracle, RowSource, StreamConsumer};
+use jolt_witness::{stream_witnesses, RowSource, StreamConsumer};
 
 use crate::commitment::{
     finish_streamed, finish_streamed_one_hot, CommitWitness, CommitmentGrid,
@@ -95,30 +93,6 @@ where
                 })
             })
             .collect()
-    }
-
-    // Instrumented at the stage-0 call boundary, like `commit_witness`.
-    fn commit_advice(
-        &self,
-        _session: &mut ProofSession,
-        witness: &dyn JoltWitnessOracle<F>,
-        id: JoltCommittedPolynomial,
-        grid: CommitmentGrid,
-        setup: &PCS::ProverSetup,
-    ) -> Result<WitnessCommitment<PCS>, KernelError<F>> {
-        // Advice grids are cycle-major with no one-hot placement, and the
-        // column is small: materialize it and feed dense rows.
-        let values = witness.oracle_table(JoltPolynomialId::Committed(id))?;
-        let mut partial = PCS::begin(setup);
-        for row in values.chunks(grid.num_columns()) {
-            PCS::feed(&mut partial, row, setup);
-        }
-        let (commitment, hint) = finish_streamed::<PCS>(partial, setup);
-        Ok(WitnessCommitment {
-            id,
-            commitment,
-            hint,
-        })
     }
 }
 

@@ -100,7 +100,6 @@ pub(crate) struct ZkFinalOpening<F> {
 pub(crate) fn prove_blindfold<F, PCS, VC, T>(
     preprocessing: &JoltProverPreprocessing<PCS, VC>,
     public_io: &PublicIo,
-    trusted_advice_commitment: Option<&PCS::Output>,
     shell: &JoltProof<PCS, VC, ()>,
     witnesses: &ZkStageWitnesses<F>,
     final_opening: &ZkFinalOpening<F>,
@@ -117,12 +116,8 @@ where
     T: Transcript<Challenge = F>,
     <F as WithAccumulator>::Accumulator: Accumulator<Element = F>,
 {
-    let (protocol, mut transcript) = replay_stages::<F, PCS, VC, T>(
-        &preprocessing.verifier,
-        public_io,
-        shell,
-        trusted_advice_commitment,
-    )?;
+    let (protocol, mut transcript) =
+        replay_stages::<F, PCS, VC, T>(&preprocessing.verifier, public_io, shell)?;
     // A 32-byte compare guarding the exact seam the design rests on: the
     // replay landing on the prover's forward transcript bytes. Hard error
     // (not debug-only) so release provers diagnose drift here rather than
@@ -176,7 +171,6 @@ fn replay_stages<F, PCS, VC, T>(
     preprocessing: &jolt_verifier::JoltVerifierPreprocessing<PCS, VC>,
     public_io: &PublicIo,
     shell: &JoltProof<PCS, VC, ()>,
-    trusted_advice_commitment: Option<&PCS::Output>,
 ) -> Result<(BlindFoldProtocol<F, VC::Output>, T), ProverError<F>>
 where
     F: JoltField + AppendToTranscript,
@@ -192,7 +186,6 @@ where
         preprocessing,
         public_io,
         shell,
-        trusted_advice_commitment,
     )?;
     let formula_dimensions = jolt_verifier::stages::build_formula_dimensions(
         shell,
@@ -258,7 +251,6 @@ where
         preprocessing,
         shell,
         &formula_dimensions,
-        trusted_advice_commitment,
         &mut transcript,
         &stage6b,
         &stage7,

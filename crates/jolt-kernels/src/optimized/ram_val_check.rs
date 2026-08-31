@@ -160,11 +160,10 @@ impl<F: JoltField> SumcheckKernel<F> for RamValCheckKernel<F> {
         inputs: &SumcheckInputClaims<F, Self::Relation>,
     ) -> Result<RamValCheckOutputClaims<F>, SumcheckKernelError<F>> {
         self.progress.require_complete()?;
-        // The advice cells are dual-role: never bound here, their wire output
-        // value is the consumed input claim read back (the naive tier's echo).
+        // The program-image cell is dual-role: never bound here, its wire
+        // output value is the consumed input claim read back (the naive
+        // tier's echo).
         Ok(RamValCheckOutputClaims {
-            untrusted_advice: inputs.untrusted_advice,
-            trusted_advice: inputs.trusted_advice,
             program_image: inputs.program_image,
             ram_ra: self.ra.final_values()[0],
             ram_inc: self.inc.evals()[0],
@@ -224,15 +223,11 @@ mod tests {
             let claims = RamValCheckInputClaims {
                 ram_val: Fr::from_u64(0),
                 ram_val_final: Fr::from_u64(0),
-                untrusted_advice: None,
-                trusted_advice: None,
                 program_image: None,
             };
             let points = RamValCheckInputClaims::<Vec<Fr>> {
                 ram_val: [r_address.clone(), r_cycle.clone()].concat(),
                 ram_val_final: r_address.clone(),
-                untrusted_advice: None,
-                trusted_advice: None,
                 program_image: None,
             };
             let challenges = RamValCheckChallenges { gamma };

@@ -14,8 +14,7 @@ use crate::units::{format_memory_size, BYTES_PER_GIB};
 
 /// Output-path prefix for the prover's mid-stage heap snapshots
 /// (`{prefix}{label}.folded`). Unset means the harness did not opt in and
-/// the prover's cfg-gated emission hooks stay inert — the same
-/// [`PPROF_PREFIX`](crate::setup) pattern.
+/// the prover's cfg-gated emission hooks stay inert.
 static FLAMEGRAPH_PREFIX: OnceLock<String> = OnceLock::new();
 
 /// Opt in to per-stage flamegraph emission (first call wins).

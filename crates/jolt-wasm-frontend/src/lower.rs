@@ -42,7 +42,7 @@
 //! - linear-memory accesses of any width/alignment (`layout::linear_address`:
 //!   one RAM cell per 4-byte wasm word): effective guest address `t`, a
 //!   one-row bounds assert `t < LIMIT_w` against the per-width limit
-//!   registers (`Reg::limit`, maintained by the entry stub and
+//!   registers (`Reg::LIMIT_B/H/W/D`, maintained by the entry stub and
 //!   `memory.grow`), floor to the cell, then a branch on the lane offset
 //!   `a & 3`: an access inside one wasm word (the common, aligned case) is
 //!   a plain cell read/write — shifted by `s = 8·(a & 3)` only for

@@ -48,9 +48,7 @@ impl<F: JoltField> JointOpeningPolynomials<F> for ReferenceBackend {
                     });
                 }
                 let embedded = match polynomial {
-                    JoltCommittedPolynomial::TrustedAdvice
-                    | JoltCommittedPolynomial::UntrustedAdvice
-                    | JoltCommittedPolynomial::BytecodeChunk(_)
+                    JoltCommittedPolynomial::BytecodeChunk(_)
                     | JoltCommittedPolynomial::ProgramImageInit => {
                         block_embed(&table, grid, polynomial)?
                     }
@@ -144,8 +142,8 @@ fn address_major_embed<F: JoltField>(
     Ok(embedded)
 }
 
-/// Embed an advice polynomial's balanced matrix into the grid matrix's
-/// top-left block: advice coefficient `row · 2^σ_a + col` lands at grid index
+/// Embed a precommitted polynomial's balanced matrix into the grid matrix's
+/// top-left block: coefficient `row · 2^σ_a + col` lands at grid index
 /// `row · 2^σ_main + col`.
 fn block_embed<F: JoltField>(
     table: &[F],

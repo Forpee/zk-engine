@@ -1,12 +1,11 @@
 //! Typed verifier stage entry points.
 
 use jolt_claims::protocols::jolt::{
-    geometry::claim_reductions::{advice, bytecode, program_image},
+    geometry::claim_reductions::{bytecode, program_image},
     geometry::dimensions::JoltFormulaDimensions,
     geometry::error::JoltFormulaPointError,
-    AdviceClaimReductionLayout, BytecodeClaimReductionLayout, JoltAdviceKind, JoltOneHotConfig,
-    JoltRelationId, PrecommittedClaimReduction, ProgramImageClaimReductionLayout,
-    TracePolynomialOrder,
+    BytecodeClaimReductionLayout, JoltOneHotConfig, JoltRelationId, PrecommittedClaimReduction,
+    ProgramImageClaimReductionLayout, TracePolynomialOrder,
 };
 use jolt_crypto::VectorCommitment;
 use jolt_field::JoltField;
@@ -113,8 +112,6 @@ pub struct CommittedProgramSchedule {
 /// re-deriving the schedule.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrecommittedSchedule {
-    pub trusted_advice: Option<AdviceClaimReductionLayout>,
-    pub untrusted_advice: Option<AdviceClaimReductionLayout>,
     pub bytecode: Option<BytecodeClaimReductionLayout>,
     pub program_image: Option<ProgramImageClaimReductionLayout>,
 }
@@ -124,12 +121,9 @@ impl PrecommittedSchedule {
         trace_order: TracePolynomialOrder,
         log_t: usize,
         log_k_chunk: usize,
-        trusted_max_advice_bytes: Option<usize>,
-        untrusted_max_advice_bytes: Option<usize>,
         committed_program: Option<CommittedProgramSchedule>,
     ) -> Result<Self, JoltFormulaPointError> {
-        let mut candidates =
-            advice::candidate_total_vars(trusted_max_advice_bytes, untrusted_max_advice_bytes);
+        let mut candidates = Vec::new();
         if let Some(committed) = committed_program {
             candidates.push(bytecode::precommitted_candidate(
                 committed.bytecode_len,
@@ -148,18 +142,6 @@ impl PrecommittedSchedule {
             &candidates,
             log_k_chunk,
         );
-        let layout = |max_bytes: Option<usize>| {
-            max_bytes
-                .map(|max_bytes| {
-                    AdviceClaimReductionLayout::balanced(
-                        trace_order,
-                        log_t,
-                        scheduling_reference,
-                        max_bytes,
-                    )
-                })
-                .transpose()
-        };
         let bytecode = committed_program
             .map(|committed| {
                 BytecodeClaimReductionLayout::balanced(
@@ -183,17 +165,8 @@ impl PrecommittedSchedule {
             })
             .transpose()?;
         Ok(Self {
-            trusted_advice: layout(trusted_max_advice_bytes)?,
-            untrusted_advice: layout(untrusted_max_advice_bytes)?,
             bytecode,
             program_image,
         })
-    }
-
-    pub fn advice(&self, kind: JoltAdviceKind) -> Option<&AdviceClaimReductionLayout> {
-        match kind {
-            JoltAdviceKind::Trusted => self.trusted_advice.as_ref(),
-            JoltAdviceKind::Untrusted => self.untrusted_advice.as_ref(),
-        }
     }
 }

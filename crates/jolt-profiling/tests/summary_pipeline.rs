@@ -206,9 +206,6 @@ fn fixture_labels_conform_to_taxonomy() {
         let always = taxonomy::always_present_spans(mode);
         assert!(always.contains(&taxonomy::ROOT_SPAN));
         assert!(always.contains(&"prove_batch"));
-        assert!(!always
-            .iter()
-            .any(|l| taxonomy::ADVICE_SEAM_SPANS.contains(l)));
     }
     // The mode seams are disjoint siblings: exactly one pair per mode.
     let clear = taxonomy::always_present_spans(taxonomy::ProverMode::Clear);

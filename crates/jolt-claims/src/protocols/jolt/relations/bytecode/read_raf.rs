@@ -152,7 +152,7 @@ mod tests {
                         JoltPolynomialId::Virtual(JoltVirtualPolynomial::LookupTableFlag(index)),
                     relation: JoltRelationId::InstructionReadRaf,
                 } => Fr::from_u64(300 + index as u64),
-                _ => zero,
+                JoltOpeningId::Polynomial { .. } => zero,
             },
             |id| match *id {
                 JoltChallengeId::BytecodeReadRaf(BytecodeReadRafChallenge::Gamma) => gamma,
@@ -225,7 +225,7 @@ mod tests {
             |id| match *id {
                 id if id == bytecode_ra(0) => bytecode_ra_0,
                 id if id == bytecode_ra(1) => bytecode_ra_1,
-                _ => zero,
+                JoltOpeningId::Polynomial { .. } => zero,
             },
             |id| match *id {
                 JoltChallengeId::BytecodeReadRaf(BytecodeReadRafChallenge::Gamma) => gamma,

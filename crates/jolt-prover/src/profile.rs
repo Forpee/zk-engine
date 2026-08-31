@@ -656,7 +656,6 @@ fn prove_workload(
         &backend,
         &prover_preprocessing,
         &run.config,
-        None,
         &witness,
         &run.io,
     )
@@ -672,7 +671,6 @@ fn prove_workload(
         &prover_preprocessing.verifier,
         &run.io,
         &proof,
-        None,
     )
     .expect("modular proof verifies");
 

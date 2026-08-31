@@ -44,7 +44,7 @@ use crate::{
 /// stage's Outputs→Inputs dataflow is expressed: the register read-write inputs
 /// come from stage 3's registers claim-reduction, and the RAM value-check inputs
 /// come from stage 2's RAM `val`/`val_final` plus the reconstructed `Val_init`
-/// decomposition (advice / program-image contributions).
+/// decomposition (the program-image contribution).
 pub fn stage4_input_values_from_upstream<F: JoltField>(
     stage2: &Stage2BatchOutputClaims<F>,
     stage3: &Stage3OutputClaims<F>,
@@ -130,12 +130,8 @@ where
     // The mode-agnostic init structure (public eval + contribution selectors and
     // staged points); the clear arm attaches the claimed opening values below. Its
     // decomposition must stay in lockstep with the prover's and BlindFold's.
-    let init_structure = ram_val_check_init_structure(
-        checked,
-        proof.untrusted_advice_commitment.is_some(),
-        r_address,
-        ram_val_check_public_eval,
-    )?;
+    let init_structure =
+        ram_val_check_init_structure(checked, r_address, ram_val_check_public_eval)?;
 
     let sumchecks = Stage4Sumchecks {
         registers_read_write: RegistersReadWriteChecking::new(register_dimensions),
@@ -153,7 +149,7 @@ where
         let stage2 = stage2.clear()?;
         let stage3 = stage3.clear()?;
         sumchecks.validate_output_claims(claims)?;
-        // Attaches the claimed advice / program-image opening values (consumed by the
+        // Attaches the claimed program-image opening value (consumed by the
         // input wiring and carried downstream for the stage-6/7 address-phase
         // reductions); presence against the init structure is validated by the
         // generated `validate_output_claims` above and re-checked here.
@@ -200,8 +196,8 @@ where
         )?;
 
         // Built via the same wiring as the clear path, off the ZK-agnostic upstream
-        // output points and init structure. Advice / program-image openings live in
-        // BlindFold for ZK proofs, so `derive_opening_points` leaves those leaves
+        // output points and init structure. The program-image opening lives in
+        // BlindFold for ZK proofs, so `derive_opening_points` leaves that leaf
         // absent in the produced points.
         let input_points = stage4_input_points_from_upstream(
             stage2.batch_output_points(),

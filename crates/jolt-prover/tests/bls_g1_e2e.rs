@@ -110,7 +110,6 @@ fn g1_mul_proof_is_accepted() {
                     &JoltBackend::optimized(),
                     &prover_preprocessing,
                     &run.config,
-                    None,
                     &witness,
                     &run.io,
                 )
@@ -119,7 +118,6 @@ fn g1_mul_proof_is_accepted() {
                 &prover_preprocessing.verifier,
                 &run.io,
                 &proof,
-                None,
             )
             .expect("proof must verify");
 
@@ -131,7 +129,6 @@ fn g1_mul_proof_is_accepted() {
                     &prover_preprocessing.verifier,
                     &forged,
                     &proof,
-                    None,
                 )
                 .is_err()
             );

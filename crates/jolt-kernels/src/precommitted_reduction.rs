@@ -5,7 +5,7 @@
 //! boundary via [`SumcheckKernel::park_residue`] and the stage-7 slot's
 //! `prepare` reclaims by move.
 //!
-//! Four kinds share the machinery — trusted advice, untrusted advice,
+//! The kinds share the machinery —
 //! committed bytecode, program image — each as a plain set of impls below:
 //! the phase kernels are generic over the relation, and each kind contributes
 //! one `SumcheckKernel` impl per phase (the typed wire-claim assembly plus,
@@ -45,12 +45,6 @@ use jolt_sumcheck::{ProveRounds, SumcheckError};
 use jolt_verifier::stages::stage6b::committed_reduction_cycle_phase::{
     BytecodeReductionCyclePhase, BytecodeReductionCyclePhaseOutputClaims,
     ProgramImageReductionCyclePhase, ProgramImageReductionCyclePhaseOutputClaims,
-    TrustedAdviceCyclePhase, TrustedAdviceCyclePhaseOutputClaims, UntrustedAdviceCyclePhase,
-    UntrustedAdviceCyclePhaseOutputClaims,
-};
-use jolt_verifier::stages::stage7::advice_address_phase::{
-    TrustedAdviceAddressPhase, TrustedAdviceAddressPhaseOutputClaims, UntrustedAdviceAddressPhase,
-    UntrustedAdviceAddressPhaseOutputClaims,
 };
 use jolt_verifier::stages::stage7::committed_reduction_address_phase::{
     BytecodeReductionAddressPhase, BytecodeReductionAddressPhaseOutputClaims,
@@ -414,40 +408,6 @@ impl<F: JoltField, R> ProveRounds<F> for AddressReductionKernel<F, R> {
     }
 }
 
-impl<F: JoltField> SumcheckKernel<F> for CycleReductionKernel<F, TrustedAdviceCyclePhase<F>> {
-    type Relation = TrustedAdviceCyclePhase<F>;
-
-    fn output_claims(
-        &mut self,
-        _inputs: &SumcheckInputClaims<F, Self::Relation>,
-    ) -> Result<TrustedAdviceCyclePhaseOutputClaims<F>, SumcheckKernelError<F>> {
-        Ok(TrustedAdviceCyclePhaseOutputClaims {
-            trusted: self.scalar_claim()?,
-        })
-    }
-
-    fn park_residue(self: Box<Self>, session: &mut ProofSession) {
-        self.park_carry::<TrustedAdviceAddressPhase<F>>(session);
-    }
-}
-
-impl<F: JoltField> SumcheckKernel<F> for CycleReductionKernel<F, UntrustedAdviceCyclePhase<F>> {
-    type Relation = UntrustedAdviceCyclePhase<F>;
-
-    fn output_claims(
-        &mut self,
-        _inputs: &SumcheckInputClaims<F, Self::Relation>,
-    ) -> Result<UntrustedAdviceCyclePhaseOutputClaims<F>, SumcheckKernelError<F>> {
-        Ok(UntrustedAdviceCyclePhaseOutputClaims {
-            untrusted: self.scalar_claim()?,
-        })
-    }
-
-    fn park_residue(self: Box<Self>, session: &mut ProofSession) {
-        self.park_carry::<UntrustedAdviceAddressPhase<F>>(session);
-    }
-}
-
 impl<F: JoltField> SumcheckKernel<F> for CycleReductionKernel<F, BytecodeReductionCyclePhase<F>> {
     type Relation = BytecodeReductionCyclePhase<F>;
 
@@ -492,32 +452,6 @@ impl<F: JoltField> SumcheckKernel<F>
 
     fn park_residue(self: Box<Self>, session: &mut ProofSession) {
         self.park_carry::<ProgramImageReductionAddressPhase<F>>(session);
-    }
-}
-
-impl<F: JoltField> SumcheckKernel<F> for AddressReductionKernel<F, TrustedAdviceAddressPhase<F>> {
-    type Relation = TrustedAdviceAddressPhase<F>;
-
-    fn output_claims(
-        &mut self,
-        _inputs: &SumcheckInputClaims<F, Self::Relation>,
-    ) -> Result<TrustedAdviceAddressPhaseOutputClaims<F>, SumcheckKernelError<F>> {
-        Ok(TrustedAdviceAddressPhaseOutputClaims {
-            trusted: self.tables.final_claim()?,
-        })
-    }
-}
-
-impl<F: JoltField> SumcheckKernel<F> for AddressReductionKernel<F, UntrustedAdviceAddressPhase<F>> {
-    type Relation = UntrustedAdviceAddressPhase<F>;
-
-    fn output_claims(
-        &mut self,
-        _inputs: &SumcheckInputClaims<F, Self::Relation>,
-    ) -> Result<UntrustedAdviceAddressPhaseOutputClaims<F>, SumcheckKernelError<F>> {
-        Ok(UntrustedAdviceAddressPhaseOutputClaims {
-            untrusted: self.tables.final_claim()?,
-        })
     }
 }
 
@@ -595,22 +529,6 @@ pub(crate) fn permute_coefficients<F: Copy + Send + Sync>(
         return (0..table.len()).into_par_iter().map(gather).collect();
     }
     (0..table.len()).map(gather).collect()
-}
-
-/// The challenge-vector counterpart of [`permute_coefficients`]: relabel the
-/// big-endian challenge positions so `eq(permuted_challenges)` indexes the
-/// permuted coefficient table.
-pub(crate) fn permute_challenges<F: Copy>(
-    challenges_be: &[F],
-    old_lsb_to_new_lsb: &[usize],
-) -> Vec<F> {
-    let num_vars = challenges_be.len();
-    let mut permuted = challenges_be.to_vec();
-    for (old_be, &challenge) in challenges_be.iter().enumerate() {
-        let new_lsb = old_lsb_to_new_lsb[num_vars - 1 - old_be];
-        permuted[num_vars - 1 - new_lsb] = challenge;
-    }
-    permuted
 }
 
 /// Permute a batch of coefficient tables into the reduction's Dory

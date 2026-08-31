@@ -1,8 +1,7 @@
 //! Optimized precommitted claim-reduction family: the stage-6b cycle phases
-//! and stage-7 address phases of the trusted/untrusted advice, committed
-//! bytecode, and program-image reductions, plus the stage-4 advice opening
+//! and stage-7 address phases of the committed
+//! bytecode and program-image reductions, plus the stage-4 opening
 //! evaluation — byte-parity twins of the reference kernels in
-//! [`crate::reference::advice_claim_reduction`],
 //! [`crate::reference::bytecode_claim_reduction`],
 //! [`crate::reference::program_image_claim_reduction`], and
 //! [`crate::reference::precommitted_reduction`].
@@ -16,12 +15,8 @@
 //! carry the other tier's address slot reclaims, and mixed-tier composition
 //! holds by construction. What this module owns is the PREPARE side — the
 //! table builders (ported from
-//! `jolt-prover-legacy/src/zkvm/claim_reductions/{advice,bytecode,program_image}.rs`):
+//! `jolt-prover-legacy/src/zkvm/claim_reductions/{bytecode,program_image}.rs`):
 //!
-//! - **Advice** (`AdviceClaimReductionProver::initialize`): the eq table is
-//!   built from the LSB-permuted challenges directly (one parallel
-//!   `EqPolynomial::evals`, no coefficient permute), and only the advice
-//!   coefficient table pays the parallel permute-gather.
 //! - **Program image** (`shifted_program_image_eq_slice`): the shifted eq
 //!   slice `eq(r_addr_rw, start_index + ·)` is assembled from maximal
 //!   aligned blocks (`EqPolynomial::evals_for_max_aligned_block`, wrap-aware)
@@ -42,10 +37,9 @@
 
 use std::marker::PhantomData;
 
-use jolt_claims::protocols::jolt::geometry::claim_reductions::advice::ram_val_check_advice_opening;
 use jolt_claims::protocols::jolt::{
-    AdviceClaimReductionLayout, BytecodeClaimReductionLayout, JoltAdviceKind, JoltChallengeId,
-    PrecommittedReductionLayout, ProgramImageClaimReductionLayout,
+    BytecodeClaimReductionLayout, JoltChallengeId, PrecommittedReductionLayout,
+    ProgramImageClaimReductionLayout,
 };
 use jolt_claims::{InputClaims, OutputClaims, SumcheckChallenges};
 use jolt_field::JoltField;
@@ -54,12 +48,11 @@ use jolt_verifier::stages::relations::{
     ConcreteSumcheck, ConcreteSumcheckChallenges, SumcheckInputClaims, SumcheckOutputClaims,
 };
 use jolt_verifier::stages::stage6b::committed_reduction_cycle_phase::{
-    BytecodeReductionCyclePhase, ProgramImageReductionCyclePhase, TrustedAdviceCyclePhase,
-    UntrustedAdviceCyclePhase,
+    BytecodeReductionCyclePhase, ProgramImageReductionCyclePhase,
 };
 use jolt_verifier::stages::stage6b::outputs::BytecodeReductionWeights;
 use jolt_wasm_ir::BytecodeRow;
-use jolt_witness::{JoltWitnessOracle, JoltWitnessPlane};
+use jolt_witness::JoltWitnessPlane;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -67,10 +60,9 @@ use super::support::eq_table;
 use crate::committed_program::{
     build_committed_bytecode_chunk, chunk_index_to_lane_cycle, program_image_words_padded,
 };
-use crate::opening::AdviceOpeningEvaluation;
 use crate::precommitted_reduction::{
-    lsb_permutation, permute_challenges, permute_coefficients, permute_tables,
-    AddressReductionKernel, CycleReductionKernel, PrecommittedReductionCarry,
+    lsb_permutation, permute_coefficients, permute_tables, AddressReductionKernel,
+    CycleReductionKernel, PrecommittedReductionCarry,
 };
 use crate::{KernelError, PrepareKernel, ProofSession, ProverInputs, SumcheckKernel};
 
@@ -79,7 +71,7 @@ use crate::{KernelError, PrepareKernel, ProofSession, ProverInputs, SumcheckKern
 #[cfg(feature = "parallel")]
 const PAR_THRESHOLD: usize = 1 << 10;
 
-/// The precommitted cycle phases and the advice opening evaluation:
+/// The precommitted cycle phases:
 /// `PrepareKernel` front of the four stage-6b cycle-phase slots plus the
 /// stage-4 `AdviceOpeningEvaluation` slot.
 pub struct OptimizedPrecommittedCycle;
@@ -126,139 +118,6 @@ where
         )?;
         Ok(Box::new(AddressReductionKernel::new(carry)))
     }
-}
-
-// ---------------------------------------------------------------- advice
-
-impl<F: JoltField> AdviceOpeningEvaluation<F> for OptimizedPrecommittedCycle {
-    #[tracing::instrument(skip_all, name = "OptimizedAdviceOpeningEvaluation::evaluate", fields(kind = ?kind))]
-    fn evaluate(
-        &self,
-        _session: &mut ProofSession,
-        kind: JoltAdviceKind,
-        point: &[F],
-        witness: &dyn JoltWitnessOracle<F>,
-    ) -> Result<F, KernelError<F>> {
-        let table = advice_table(witness, kind, point.len())?;
-        let eq = eq_table(point);
-        #[cfg(feature = "parallel")]
-        if table.len() >= PAR_THRESHOLD {
-            return Ok(table
-                .par_iter()
-                .zip(eq)
-                .map(|(value, weight)| *value * weight)
-                .sum());
-        }
-        Ok(table
-            .iter()
-            .zip(&eq)
-            .map(|(value, weight)| *value * *weight)
-            .sum())
-    }
-}
-
-impl<F: JoltField> PrepareKernel<F, TrustedAdviceCyclePhase<F>> for OptimizedPrecommittedCycle {
-    fn prepare(
-        &self,
-        _session: &mut ProofSession,
-        witness: &dyn JoltWitnessPlane<F>,
-        inputs: ProverInputs<'_, F, TrustedAdviceCyclePhase<F>>,
-    ) -> Result<Box<dyn SumcheckKernel<F, Relation = TrustedAdviceCyclePhase<F>>>, KernelError<F>>
-    {
-        let r_val =
-            inputs
-                .relation
-                .reference_opening_point()
-                .ok_or(KernelError::InvariantViolation {
-                    reason: "trusted-advice cycle phase carries no reference opening point",
-                })?;
-        Ok(Box::new(advice_reduction_kernel::<
-            F,
-            TrustedAdviceCyclePhase<F>,
-        >(
-            JoltAdviceKind::Trusted,
-            inputs.relation.layout(),
-            r_val,
-            witness,
-        )?))
-    }
-}
-
-impl<F: JoltField> PrepareKernel<F, UntrustedAdviceCyclePhase<F>> for OptimizedPrecommittedCycle {
-    fn prepare(
-        &self,
-        _session: &mut ProofSession,
-        witness: &dyn JoltWitnessPlane<F>,
-        inputs: ProverInputs<'_, F, UntrustedAdviceCyclePhase<F>>,
-    ) -> Result<Box<dyn SumcheckKernel<F, Relation = UntrustedAdviceCyclePhase<F>>>, KernelError<F>>
-    {
-        let r_val =
-            inputs
-                .relation
-                .reference_opening_point()
-                .ok_or(KernelError::InvariantViolation {
-                    reason: "untrusted-advice cycle phase carries no reference opening point",
-                })?;
-        Ok(Box::new(advice_reduction_kernel::<
-            F,
-            UntrustedAdviceCyclePhase<F>,
-        >(
-            JoltAdviceKind::Untrusted,
-            inputs.relation.layout(),
-            r_val,
-            witness,
-        )?))
-    }
-}
-
-/// The advice reduction's cycle-phase kernel: the advice polynomial as the
-/// value table and the eq table of the staged RAM value-check point, both in
-/// Dory opening-round order. The eq table is built from the permuted
-/// challenges directly — the coefficient permute and the challenge permute
-/// are the same LSB relabeling, so `permuted_table[i] · permuted_eq[i]` pairs
-/// exactly as the unpermuted product did.
-fn advice_reduction_kernel<F: JoltField, R>(
-    kind: JoltAdviceKind,
-    layout: &AdviceClaimReductionLayout,
-    r_val: &[F],
-    witness: &dyn JoltWitnessPlane<F>,
-) -> Result<CycleReductionKernel<F, R>, KernelError<F>> {
-    let reduction = layout.precommitted().clone();
-    let permutation = reduction.poly_opening_round_permutation_be();
-    if r_val.len() != permutation.len() {
-        return Err(KernelError::InvalidGeometry {
-            reason: format!(
-                "advice reference point has {} variables, schedule expects {}",
-                r_val.len(),
-                permutation.len()
-            ),
-        });
-    }
-    let table = advice_table(witness, kind, permutation.len())?;
-    let (value, eq) = match lsb_permutation(permutation) {
-        Some(old_lsb_to_new_lsb) => (
-            permute_coefficients(&table, &old_lsb_to_new_lsb),
-            eq_table(&permute_challenges(r_val, &old_lsb_to_new_lsb)),
-        ),
-        None => (table, eq_table(r_val)),
-    };
-    CycleReductionKernel::new(reduction, value, eq, Vec::new())
-}
-
-fn advice_table<F: JoltField>(
-    witness: &dyn JoltWitnessOracle<F>,
-    kind: JoltAdviceKind,
-    expected_vars: usize,
-) -> Result<Vec<F>, KernelError<F>> {
-    let table = witness.oracle_table(ram_val_check_advice_opening(kind).polynomial_id())?;
-    if table.len() != 1usize << expected_vars {
-        return Err(KernelError::TableSizeMismatch {
-            table: format!("{kind:?} advice"),
-            expected: 1usize << expected_vars,
-            got: table.len(),
-        });
-    }
-    Ok(table)
 }
 
 // --------------------------------------------------------- program image
@@ -572,8 +431,6 @@ mod tests {
                     trace_order,
                     LOG_T,
                     LOG_K_CHUNK,
-                    None,
-                    None,
                     Some(CommittedProgramSchedule {
                         bytecode_len,
                         bytecode_chunk_count: BYTECODE_CHUNK_COUNT,

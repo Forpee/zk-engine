@@ -32,7 +32,6 @@ pub fn verify<F, PCS, VC, T>(
     preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     public_io: &PublicIo,
     proof: &JoltProof<PCS, VC>,
-    trusted_advice_commitment: Option<&PCS::Output>,
 ) -> Result<(), VerifierError>
 where
     F: JoltField + AppendToTranscript,
@@ -46,12 +45,8 @@ where
 {
     use crate::stages::zk::{blindfold, inputs::BlindFoldInputs};
 
-    let (checked, mut transcript) = validate_and_seed_transcript::<PCS, VC, T, _>(
-        preprocessing,
-        public_io,
-        proof,
-        trusted_advice_commitment,
-    )?;
+    let (checked, mut transcript) =
+        validate_and_seed_transcript::<PCS, VC, T, _>(preprocessing, public_io, proof)?;
 
     // Built once for the whole verification and shared by the stages that read
     // the RA layout (5-8), instead of each rebuilding the same dimensions.
@@ -119,7 +114,6 @@ where
         preprocessing,
         proof,
         &formula_dimensions,
-        trusted_advice_commitment,
         &mut transcript,
         &stage6b,
         &stage7,
@@ -170,7 +164,6 @@ pub fn validate_and_seed_transcript<PCS, VC, T, ZkProof>(
     preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     public_io: &PublicIo,
     proof: &JoltProof<PCS, VC, ZkProof>,
-    trusted_advice_commitment: Option<&PCS::Output>,
 ) -> Result<(CheckedInputs, T), VerifierError>
 where
     PCS: CommitmentScheme,
@@ -179,23 +172,13 @@ where
     VC::Output: AppendToTranscript,
     T: Transcript<Challenge = PCS::Field>,
 {
-    let checked = validate_inputs(
-        preprocessing,
-        public_io,
-        proof,
-        trusted_advice_commitment.is_some(),
-    )?;
+    let checked = validate_inputs(preprocessing, public_io, proof)?;
     validate_proof_consistency(proof, checked.zk)?;
     validate_proof_config(&JOLT_VERIFIER_CONFIG, proof.protocol)?;
 
     let mut transcript = T::new(b"Jolt");
     absorb_preamble(&checked, proof, &mut transcript);
-    absorb_commitments(
-        preprocessing,
-        proof,
-        trusted_advice_commitment,
-        &mut transcript,
-    );
+    absorb_commitments(preprocessing, proof, &mut transcript);
 
     Ok((checked, transcript))
 }
@@ -213,7 +196,6 @@ pub struct CheckedInputs {
     /// The entry-stub pc of the public export.
     pub entry_pc: usize,
     pub preprocessing_digest: [u8; 32],
-    pub trusted_advice_commitment_present: bool,
     pub vc_capacity: Option<usize>,
     pub precommitted: PrecommittedSchedule,
 }
@@ -222,7 +204,6 @@ pub fn validate_inputs<PCS, VC, ZkProof>(
     preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     public_io: &PublicIo,
     proof: &JoltProof<PCS, VC, ZkProof>,
-    trusted_advice_commitment_present: bool,
 ) -> Result<CheckedInputs, VerifierError>
 where
     PCS: CommitmentScheme,
@@ -236,8 +217,6 @@ where
         proof.ram_K,
         proof.trace_polynomial_order,
         proof.one_hot_config,
-        trusted_advice_commitment_present,
-        proof.untrusted_advice_commitment.is_some(),
         zk,
     )
 }
@@ -404,13 +383,11 @@ pub(crate) fn absorb_preamble<PCS, VC, ZkProof, T>(
 /// polynomial commitments, the optional advice commitments, then the committed
 /// program's preprocessing-held commitments. WARNING: the prover must absorb
 /// identically or the transcripts diverge. On the `akita` build the order is
-/// the canonical commitment-object order: `OneHotTrace`, untrusted advice, trusted
-/// advice, `ProgramOneHot`.
+/// the canonical commitment-object order: `OneHotTrace`, `ProgramOneHot`.
 #[jolt_verifier_derive::fs_scope(Commitments)]
 pub(crate) fn absorb_commitments<PCS, VC, ZkProof, T>(
     preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     proof: &JoltProof<PCS, VC, ZkProof>,
-    trusted_advice_commitment: Option<&PCS::Output>,
     transcript: &mut T,
 ) where
     PCS: CommitmentScheme,
@@ -419,12 +396,7 @@ pub(crate) fn absorb_commitments<PCS, VC, ZkProof, T>(
     T: Transcript<Challenge = PCS::Field>,
 {
     {
-        absorb_transcript_commitments(
-            &proof.commitments,
-            proof.untrusted_advice_commitment.as_ref(),
-            trusted_advice_commitment,
-            transcript,
-        );
+        absorb_transcript_commitments(&proof.commitments, transcript);
         if let Some(committed) = preprocessing.program.committed() {
             absorb_committed_program_commitments(
                 &committed.bytecode_chunk_commitments,
@@ -458,17 +430,13 @@ pub fn absorb_committed_program_commitments<C, T>(
     transcript.append(program_image_commitment);
 }
 
-/// Absorbs the proof-derived polynomial commitments (increment, one-hot `ra`,
-/// and optional advice commitments) in the consensus-critical order. WARNING:
+/// Absorbs the proof-derived polynomial commitments (increment and one-hot
+/// `ra`) in the consensus-critical order. WARNING:
 /// this covers only the commitments carried by the proof itself; committed
 /// program-image commitments live in the preprocessing and are absorbed
 /// separately by [`absorb_commitments`] immediately after this call.
-pub fn absorb_transcript_commitments<C, T>(
-    commitments: &JoltCommitments<C>,
-    untrusted_advice_commitment: Option<&C>,
-    trusted_advice_commitment: Option<&C>,
-    transcript: &mut T,
-) where
+pub fn absorb_transcript_commitments<C, T>(commitments: &JoltCommitments<C>, transcript: &mut T)
+where
     C: AppendToTranscript,
     T: Transcript,
 {
@@ -486,14 +454,6 @@ pub fn absorb_transcript_commitments<C, T>(
     }
     for commitment in &commitments.bytecode_ra {
         absorb_commitment(commitment);
-    }
-    if let Some(untrusted_advice_commitment) = untrusted_advice_commitment {
-        append_payload_label(transcript, b"untrusted_advice", untrusted_advice_commitment);
-        transcript.append(untrusted_advice_commitment);
-    }
-    if let Some(trusted_advice_commitment) = trusted_advice_commitment {
-        append_payload_label(transcript, b"trusted_advice", trusted_advice_commitment);
-        transcript.append(trusted_advice_commitment);
     }
 }
 
@@ -598,10 +558,6 @@ pub fn absorb_transcript_preamble<T>(
     );
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Mirrors the proof-derived inputs validate_inputs threads through; bundling them would obscure the FS-critical parameter set."
-)]
 pub fn validate_inputs_from_parts<PCS, VC>(
     preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     public_io: &PublicIo,
@@ -609,8 +565,6 @@ pub fn validate_inputs_from_parts<PCS, VC>(
     ram_k: usize,
     trace_polynomial_order: TracePolynomialOrder,
     one_hot_config: JoltOneHotConfig,
-    trusted_advice_commitment_present: bool,
-    untrusted_advice_commitment_present: bool,
     zk: bool,
 ) -> Result<CheckedInputs, VerifierError>
 where
@@ -663,9 +617,6 @@ where
     }
 
     // The WASM layout has no advice regions.
-    if trusted_advice_commitment_present || untrusted_advice_commitment_present {
-        return Err(VerifierError::UnsupportedAdvice);
-    }
 
     let vc_capacity = if zk {
         Some(validate_zk_vector_commitment_setup::<PCS, VC>(
@@ -716,8 +667,6 @@ where
         trace_polynomial_order,
         num::ilog2(trace_length),
         one_hot_config.committed_chunk_bits(),
-        None,
-        None,
         committed_program,
     )
     .map_err(|error| VerifierError::InvalidPrecommittedSchedule {
@@ -735,7 +684,6 @@ where
             }
         })?,
         preprocessing_digest: preprocessing.preprocessing_digest,
-        trusted_advice_commitment_present,
         vc_capacity,
         precommitted,
     })
@@ -749,7 +697,6 @@ pub fn verify_until_stage1<PCS, VC, T, ZkProof>(
     preprocessing: &JoltVerifierPreprocessing<PCS, VC>,
     public_io: &PublicIo,
     proof: &JoltProof<PCS, VC, ZkProof>,
-    trusted_advice_commitment: Option<&PCS::Output>,
 ) -> Result<PreStage1VerifierState<T>, VerifierError>
 where
     PCS: CommitmentScheme,
@@ -758,23 +705,13 @@ where
     VC::Output: AppendToTranscript,
     T: Transcript<Challenge = PCS::Field>,
 {
-    let checked = validate_inputs(
-        preprocessing,
-        public_io,
-        proof,
-        trusted_advice_commitment.is_some(),
-    )?;
+    let checked = validate_inputs(preprocessing, public_io, proof)?;
     validate_proof_consistency(proof, checked.zk)?;
     validate_proof_config(&JoltProtocolConfig::for_zk(checked.zk), proof.protocol)?;
 
     let mut transcript = T::new(b"Jolt");
     absorb_preamble(&checked, proof, &mut transcript);
-    absorb_commitments(
-        preprocessing,
-        proof,
-        trusted_advice_commitment,
-        &mut transcript,
-    );
+    absorb_commitments(preprocessing, proof, &mut transcript);
 
     Ok(PreStage1VerifierState {
         checked,
@@ -971,7 +908,7 @@ mod tests {
         };
         let proof = proof_with_zk(false, clear_claims());
 
-        let checked = validate_inputs(&preprocessing, &public_io, &proof, false).unwrap();
+        let checked = validate_inputs(&preprocessing, &public_io, &proof).unwrap();
 
         assert_eq!(checked.public_io.inputs, vec![1, 2]);
         assert_eq!(checked.public_io.outputs, vec![3]);
@@ -979,7 +916,7 @@ mod tests {
         assert_eq!(checked.ram_K, proof.ram_K);
 
         public_io.outputs = vec![0, 0];
-        let checked = validate_inputs(&preprocessing, &public_io, &proof, false).unwrap();
+        let checked = validate_inputs(&preprocessing, &public_io, &proof).unwrap();
         assert!(checked.public_io.outputs.is_empty());
     }
 
@@ -993,7 +930,7 @@ mod tests {
         let proof = proof_with_zk(false, clear_claims());
 
         assert!(matches!(
-            validate_inputs(&preprocessing, &public_io, &proof, false),
+            validate_inputs(&preprocessing, &public_io, &proof),
             Err(VerifierError::UnknownEntry { name }) if name == "missing"
         ));
     }
@@ -1006,7 +943,7 @@ mod tests {
         proof.ram_K = 2;
 
         assert!(matches!(
-            validate_inputs(&preprocessing, &public_io, &proof, false),
+            validate_inputs(&preprocessing, &public_io, &proof),
             Err(VerifierError::InvalidRamK { got: 2, .. })
         ));
     }
@@ -1019,7 +956,7 @@ mod tests {
         proof.ram_K = 1 << 20;
 
         assert!(matches!(
-            validate_inputs(&preprocessing, &public_io, &proof, false),
+            validate_inputs(&preprocessing, &public_io, &proof),
             Err(VerifierError::InvalidRamK { got, max, .. }) if got == 1 << 20 && max < got
         ));
     }
@@ -1033,7 +970,7 @@ mod tests {
         let proof = proof_with_zk(true, zk_claims());
 
         assert!(matches!(
-            validate_inputs(&preprocessing, &public_io, &proof, false),
+            validate_inputs(&preprocessing, &public_io, &proof),
             Err(VerifierError::MissingVectorCommitmentSetup)
         ));
     }
@@ -1050,7 +987,7 @@ mod tests {
         let proof = proof_with_zk(true, zk_claims());
 
         assert!(matches!(
-            validate_inputs(&preprocessing, &public_io, &proof, false),
+            validate_inputs(&preprocessing, &public_io, &proof),
             Err(VerifierError::InvalidVectorCommitmentCapacity { got: 1, .. })
         ));
     }
@@ -1061,7 +998,6 @@ mod tests {
             commitments: test_commitments(),
             stages: stage_proofs(is_zk),
             joint_opening_proof: (),
-            untrusted_advice_commitment: None,
             claims,
             trace_length: 1,
             ram_K: TEST_RAM_K,
@@ -1152,8 +1088,6 @@ mod tests {
                     rd_inc: zero,
                 },
                 ram_val_check: stage4::RamValCheckOutputClaims {
-                    untrusted_advice: None,
-                    trusted_advice: None,
                     program_image: None,
                     ram_ra: zero,
                     ram_inc: zero,
@@ -1203,8 +1137,6 @@ mod tests {
                     ram_inc: zero,
                     rd_inc: zero,
                 },
-                trusted_advice: None,
-                untrusted_advice: None,
                 bytecode_reduction: None,
                 program_image_reduction: None,
             },
@@ -1215,8 +1147,6 @@ mod tests {
                         bytecode_ra: Vec::new(),
                         ram_ra: Vec::new(),
                     },
-                trusted_advice: None,
-                untrusted_advice: None,
                 bytecode_address_phase: None,
                 program_image_address_phase: None,
             },
